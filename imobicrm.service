@@ -1,0 +1,23 @@
+[Unit]
+Description=ImobiCRM Pro — CRM Imobiliário
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/crm_imobiliario
+ExecStartPre=/usr/bin/python3 -c "from app import init_db; init_db()"
+ExecStart=/usr/bin/python3 app.py
+Restart=always
+RestartSec=5
+Environment=FLASK_ENV=production
+
+[Install]
+WantedBy=multi-user.target
+
+# ─── Instalação no servidor Linux (Ubuntu/Debian) ───────────
+# sudo cp imobicrm.service /etc/systemd/system/
+# sudo systemctl daemon-reload
+# sudo systemctl enable imobicrm
+# sudo systemctl start imobicrm
+# sudo systemctl status imobicrm

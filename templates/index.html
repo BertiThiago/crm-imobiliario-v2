@@ -1,0 +1,2105 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ImobiCRM Pro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<style>
+:root {
+  --bg: #0b0e14;
+  --bg2: #111520;
+  --bg3: #161b27;
+  --card: #1a2030;
+  --border: #252d3d;
+  --accent: #e8a020;
+  --accent2: #f5c842;
+  --green: #22c55e;
+  --red: #ef4444;
+  --blue: #3b82f6;
+  --purple: #a855f7;
+  --text: #e8eaf0;
+  --text2: #8b95a8;
+  --text3: #5a6377;
+  --radius: 12px;
+  --shadow: 0 4px 24px rgba(0,0,0,0.4);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html,body { height:100%; font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text); font-size:14px; }
+
+/* SCROLLBAR */
+::-webkit-scrollbar { width:6px; height:6px; }
+::-webkit-scrollbar-track { background:var(--bg2); }
+::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+::-webkit-scrollbar-thumb:hover { background:var(--accent); }
+
+/* LOGIN */
+#login-screen {
+  position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+  background:radial-gradient(ellipse at 30% 20%, #1a2a3a 0%, #0b0e14 70%);
+  z-index:1000;
+}
+.login-box {
+  width:420px; background:var(--card); border:1px solid var(--border);
+  border-radius:20px; padding:48px 40px; box-shadow:0 24px 80px rgba(0,0,0,0.6);
+  animation: fadeUp 0.5s ease;
+}
+@keyframes fadeUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+.login-logo { text-align:center; margin-bottom:32px; }
+.login-logo .icon { width:64px; height:64px; background:linear-gradient(135deg,var(--accent),var(--accent2));
+  border-radius:16px; display:flex; align-items:center; justify-content:center;
+  font-size:28px; margin:0 auto 12px; box-shadow:0 8px 24px rgba(232,160,32,0.4); }
+.login-logo h1 { font-family:'Syne',sans-serif; font-size:24px; font-weight:800; }
+.login-logo p { color:var(--text2); font-size:13px; margin-top:4px; }
+.login-box label { display:block; font-size:12px; font-weight:500; color:var(--text2); margin-bottom:6px; letter-spacing:.5px; text-transform:uppercase; }
+.login-box input { width:100%; background:var(--bg2); border:1px solid var(--border); color:var(--text);
+  padding:12px 16px; border-radius:10px; font-size:14px; outline:none; transition:.2s; margin-bottom:16px; font-family:inherit; }
+.login-box input:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(232,160,32,0.1); }
+.btn-login { width:100%; padding:14px; background:linear-gradient(135deg,var(--accent),var(--accent2));
+  color:#000; font-weight:700; font-family:'Syne',sans-serif; font-size:15px; border:none;
+  border-radius:10px; cursor:pointer; transition:.2s; letter-spacing:.5px; }
+.btn-login:hover { transform:translateY(-1px); box-shadow:0 8px 24px rgba(232,160,32,0.4); }
+.login-error { color:var(--red); font-size:13px; text-align:center; margin-top:12px; }
+
+/* LAYOUT */
+#app { display:flex; height:100vh; overflow:hidden; }
+#sidebar {
+  width:240px; min-width:240px; background:var(--bg2); border-right:1px solid var(--border);
+  display:flex; flex-direction:column; padding:20px 0; transition:.3s;
+}
+.sidebar-logo { padding:0 20px 24px; border-bottom:1px solid var(--border); margin-bottom:8px; }
+.sidebar-logo .brand { display:flex; align-items:center; gap:10px; }
+.sidebar-logo .brand-icon { width:36px; height:36px; background:linear-gradient(135deg,var(--accent),var(--accent2));
+  border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:16px; }
+.sidebar-logo h2 { font-family:'Syne',sans-serif; font-size:16px; font-weight:800; line-height:1.2; }
+.sidebar-logo h2 span { color:var(--accent); }
+.nav-section { padding:8px 12px 4px; font-size:10px; font-weight:600; color:var(--text3); text-transform:uppercase; letter-spacing:1px; }
+.nav-item {
+  display:flex; align-items:center; gap:12px; padding:10px 20px;
+  color:var(--text2); cursor:pointer; transition:.15s; border-left:3px solid transparent;
+  font-size:13.5px; font-weight:500; position:relative; text-decoration:none;
+}
+.nav-item:hover { color:var(--text); background:rgba(255,255,255,0.04); }
+.nav-item.active { color:var(--accent); background:rgba(232,160,32,0.08); border-left-color:var(--accent); }
+.nav-item i { width:18px; text-align:center; font-size:14px; }
+.nav-badge { margin-left:auto; background:var(--red); color:#fff; font-size:10px;
+  font-weight:700; padding:2px 6px; border-radius:10px; }
+.sidebar-footer { margin-top:auto; padding:16px 20px; border-top:1px solid var(--border); }
+.user-pill { display:flex; align-items:center; gap:10px; }
+.user-avatar { width:32px; height:32px; background:linear-gradient(135deg,var(--accent),var(--purple));
+  border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; color:#000; }
+.user-info p { font-size:13px; font-weight:500; }
+.user-info span { font-size:11px; color:var(--text3); }
+.btn-logout { margin-left:auto; background:none; border:none; color:var(--text3); cursor:pointer; font-size:14px; }
+.btn-logout:hover { color:var(--red); }
+
+/* MAIN */
+#main { flex:1; overflow-y:auto; display:flex; flex-direction:column; }
+.topbar {
+  background:var(--bg2); border-bottom:1px solid var(--border);
+  padding:16px 28px; display:flex; align-items:center; gap:16px;
+  position:sticky; top:0; z-index:10;
+}
+.topbar h1 { font-family:'Syne',sans-serif; font-size:20px; font-weight:800; flex:1; }
+.topbar-actions { display:flex; align-items:center; gap:10px; }
+.content { padding:24px 28px; flex:1; }
+
+/* BUTTONS */
+.btn { display:inline-flex; align-items:center; gap:8px; padding:9px 18px; border-radius:9px;
+  font-size:13px; font-weight:600; cursor:pointer; border:none; transition:.15s; font-family:inherit; }
+.btn-primary { background:var(--accent); color:#000; }
+.btn-primary:hover { background:var(--accent2); transform:translateY(-1px); }
+.btn-secondary { background:var(--bg3); color:var(--text); border:1px solid var(--border); }
+.btn-secondary:hover { border-color:var(--accent); color:var(--accent); }
+.btn-danger { background:rgba(239,68,68,0.15); color:var(--red); border:1px solid rgba(239,68,68,0.3); }
+.btn-danger:hover { background:var(--red); color:#fff; }
+.btn-success { background:rgba(34,197,94,0.15); color:var(--green); border:1px solid rgba(34,197,94,0.3); }
+.btn-success:hover { background:var(--green); color:#000; }
+.btn-sm { padding:6px 12px; font-size:12px; }
+.btn-icon { width:36px; height:36px; padding:0; justify-content:center; border-radius:9px; }
+
+/* CARDS */
+.card { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:20px; }
+.card-title { font-family:'Syne',sans-serif; font-size:14px; font-weight:700; margin-bottom:16px; display:flex; align-items:center; gap:8px; }
+.card-title i { color:var(--accent); }
+
+/* STATS GRID */
+.stats-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:16px; margin-bottom:24px; }
+.stat-card { background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+  padding:20px; position:relative; overflow:hidden; transition:.2s; }
+.stat-card:hover { border-color:var(--accent); transform:translateY(-2px); box-shadow:var(--shadow); }
+.stat-card::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; }
+.stat-card.gold::before { background:linear-gradient(90deg,var(--accent),var(--accent2)); }
+.stat-card.green::before { background:var(--green); }
+.stat-card.blue::before { background:var(--blue); }
+.stat-card.red::before { background:var(--red); }
+.stat-card.purple::before { background:var(--purple); }
+.stat-label { font-size:11px; font-weight:600; color:var(--text3); text-transform:uppercase; letter-spacing:.5px; margin-bottom:8px; }
+.stat-value { font-family:'Syne',sans-serif; font-size:28px; font-weight:800; }
+.stat-sub { font-size:12px; color:var(--text2); margin-top:4px; }
+.stat-icon { position:absolute; right:16px; top:50%; transform:translateY(-50%); font-size:32px; opacity:.1; }
+
+/* TABLE */
+.table-wrap { overflow-x:auto; border-radius:var(--radius); border:1px solid var(--border); }
+table { width:100%; border-collapse:collapse; }
+table th { background:var(--bg3); padding:12px 16px; text-align:left; font-size:11px;
+  font-weight:600; color:var(--text3); text-transform:uppercase; letter-spacing:.5px; white-space:nowrap; }
+table td { padding:12px 16px; border-top:1px solid var(--border); font-size:13px; white-space:nowrap; }
+table tr:hover td { background:rgba(255,255,255,0.02); }
+table td a { color:var(--accent); text-decoration:none; font-weight:500; }
+table td a:hover { text-decoration:underline; }
+
+/* BADGES */
+.badge { display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600; }
+.badge-novo { background:rgba(59,130,246,0.2); color:var(--blue); }
+.badge-contato { background:rgba(232,160,32,0.2); color:var(--accent); }
+.badge-visita { background:rgba(168,85,247,0.2); color:var(--purple); }
+.badge-proposta { background:rgba(245,200,66,0.2); color:var(--accent2); }
+.badge-contrato { background:rgba(34,197,94,0.2); color:var(--green); }
+.badge-fechado { background:rgba(34,197,94,0.3); color:#4ade80; }
+.badge-perdido { background:rgba(239,68,68,0.2); color:var(--red); }
+.badge-frio { background:rgba(148,163,184,0.2); color:#94a3b8; }
+.badge-morno { background:rgba(251,191,36,0.2); color:#fbbf24; }
+.badge-quente { background:rgba(239,68,68,0.2); color:var(--red); }
+.badge-lancamento { background:rgba(59,130,246,0.2); color:var(--blue); }
+.badge-quintoandar { background:rgba(34,197,94,0.2); color:var(--green); }
+
+/* KANBAN */
+.kanban-board { display:flex; gap:16px; overflow-x:auto; padding-bottom:16px; min-height:500px; }
+.kanban-col { min-width:220px; width:220px; background:var(--bg2); border-radius:var(--radius);
+  border:1px solid var(--border); display:flex; flex-direction:column; }
+.kanban-header { padding:12px 14px; font-size:12px; font-weight:700; border-bottom:1px solid var(--border);
+  display:flex; align-items:center; justify-content:space-between; }
+.kanban-count { background:var(--border); padding:1px 8px; border-radius:10px; font-size:11px; }
+.kanban-body { padding:10px; flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px; }
+.kanban-card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px;
+  cursor:pointer; transition:.15s; border-left:3px solid var(--border); }
+.kanban-card:hover { border-color:var(--accent); transform:translateX(2px); }
+.kanban-card .k-name { font-size:13px; font-weight:600; margin-bottom:6px; }
+.kanban-card .k-info { font-size:11px; color:var(--text2); display:flex; align-items:center; gap:4px; }
+.kanban-card .k-tags { display:flex; gap:4px; margin-top:8px; flex-wrap:wrap; }
+
+/* FUNIL */
+.funil-bar { display:flex; align-items:center; gap:12px; margin-bottom:10px; }
+.funil-label { width:100px; font-size:12px; color:var(--text2); text-align:right; }
+.funil-track { flex:1; height:28px; background:var(--bg3); border-radius:6px; overflow:hidden; }
+.funil-fill { height:100%; border-radius:6px; display:flex; align-items:center; padding:0 10px;
+  font-size:11px; font-weight:700; color:#000; transition:width 1s ease; }
+.funil-total { width:40px; font-size:12px; font-weight:700; color:var(--accent); }
+
+/* FORM / MODAL */
+.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.7); backdrop-filter:blur(4px);
+  display:flex; align-items:center; justify-content:center; z-index:500; animation:fadeIn .2s; }
+@keyframes fadeIn { from{opacity:0} to{opacity:1} }
+.modal { background:var(--card); border:1px solid var(--border); border-radius:16px;
+  width:640px; max-width:95vw; max-height:90vh; overflow-y:auto; box-shadow:0 32px 80px rgba(0,0,0,0.6); }
+.modal-lg { width:800px; }
+.modal-xl { width:1000px; }
+.modal-header { padding:20px 24px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+.modal-header h2 { font-family:'Syne',sans-serif; font-size:18px; font-weight:800; }
+.modal-close { background:none; border:none; color:var(--text2); cursor:pointer; font-size:20px; line-height:1; }
+.modal-close:hover { color:var(--red); }
+.modal-body { padding:24px; }
+.modal-footer { padding:16px 24px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:10px; }
+
+/* FORM */
+.form-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.form-grid.cols3 { grid-template-columns:1fr 1fr 1fr; }
+.form-full { grid-column:1/-1; }
+.form-group { display:flex; flex-direction:column; gap:6px; }
+.form-group label { font-size:11px; font-weight:600; color:var(--text2); text-transform:uppercase; letter-spacing:.5px; }
+.form-group input, .form-group select, .form-group textarea {
+  background:var(--bg2); border:1px solid var(--border); color:var(--text);
+  padding:10px 14px; border-radius:9px; font-size:13px; outline:none; transition:.2s;
+  font-family:inherit; width:100%;
+}
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+  border-color:var(--accent); box-shadow:0 0 0 3px rgba(232,160,32,0.1);
+}
+.form-group textarea { resize:vertical; min-height:80px; }
+.form-group select option { background:var(--bg2); }
+
+/* TIMELINE */
+.timeline { position:relative; padding-left:28px; }
+.timeline::before { content:''; position:absolute; left:8px; top:0; bottom:0; width:2px; background:var(--border); }
+.tl-item { position:relative; margin-bottom:20px; }
+.tl-dot { position:absolute; left:-24px; top:4px; width:14px; height:14px; border-radius:50%;
+  background:var(--accent); border:2px solid var(--bg); z-index:1; }
+.tl-dot.call { background:var(--green); }
+.tl-dot.email { background:var(--blue); }
+.tl-dot.visita { background:var(--purple); }
+.tl-dot.nota { background:var(--text3); }
+.tl-content { background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:12px 14px; }
+.tl-meta { font-size:11px; color:var(--text3); margin-top:6px; }
+
+/* TABS */
+.tabs { display:flex; gap:4px; margin-bottom:20px; background:var(--bg2);
+  padding:4px; border-radius:10px; border:1px solid var(--border); width:fit-content; }
+.tab { padding:8px 18px; border-radius:8px; font-size:13px; font-weight:500;
+  cursor:pointer; color:var(--text2); transition:.15s; border:none; background:none; font-family:inherit; }
+.tab.active { background:var(--accent); color:#000; font-weight:700; }
+.tab:hover:not(.active) { color:var(--text); background:rgba(255,255,255,0.05); }
+
+/* PROGRESS */
+.progress-bar { height:6px; background:var(--border); border-radius:3px; overflow:hidden; margin-top:6px; }
+.progress-fill { height:100%; border-radius:3px; background:linear-gradient(90deg,var(--accent),var(--accent2)); }
+
+/* SEARCH */
+.search-box { position:relative; }
+.search-box input { padding-left:38px; }
+.search-box i { position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text3); }
+
+/* CHIP/TAG FILTERS */
+.filter-chips { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
+.chip { padding:6px 14px; border-radius:20px; font-size:12px; font-weight:500;
+  cursor:pointer; border:1px solid var(--border); color:var(--text2); transition:.15s; }
+.chip:hover, .chip.active { border-color:var(--accent); color:var(--accent); background:rgba(232,160,32,0.08); }
+
+/* WHATSAPP */
+.wa-phone-list { background:var(--bg2); border:1px solid var(--border); border-radius:10px;
+  max-height:200px; overflow-y:auto; }
+.wa-phone-item { display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--border); }
+.wa-phone-item:last-child { border-bottom:none; }
+.wa-status { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.wa-status.pending { background:var(--text3); }
+.wa-status.sent { background:var(--green); }
+.wa-status.error { background:var(--red); }
+.wa-progress { background:var(--bg2); border-radius:var(--radius); padding:16px; margin-top:12px; }
+.wa-progress-bar { height:8px; background:var(--border); border-radius:4px; overflow:hidden; margin:8px 0; }
+.wa-progress-fill { height:100%; background:linear-gradient(90deg,#25d366,#128c7e); border-radius:4px; transition:width .5s; }
+
+/* EMPTY STATE */
+.empty-state { text-align:center; padding:60px 20px; color:var(--text3); }
+.empty-state i { font-size:48px; margin-bottom:16px; opacity:.3; }
+.empty-state p { font-size:15px; }
+
+/* GRID LAYOUTS */
+.grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+.grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:20px; }
+
+/* TOOLTIP */
+[title] { cursor:help; }
+
+/* RESPONSIVE */
+@media(max-width:768px) {
+  #sidebar { width:60px; min-width:60px; }
+  .sidebar-logo h2, .nav-item span, .user-info { display:none; }
+  .stats-grid { grid-template-columns:1fr 1fr; }
+  .form-grid { grid-template-columns:1fr; }
+}
+
+/* ANIMATIONS */
+.fade-in { animation:fadeIn .3s ease; }
+.slide-up { animation:fadeUp .3s ease; }
+
+/* CUSTOM SCROLLBAR IN KANBAN */
+.kanban-board::-webkit-scrollbar { height:6px; }
+.kanban-board::-webkit-scrollbar-track { background:var(--bg); }
+
+/* VALOR HIGHLIGHT */
+.valor { font-family:'Syne',sans-serif; font-weight:700; color:var(--accent); }
+
+/* TEMPERATURE DOT */
+.temp-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:4px; }
+.temp-dot.frio { background:#94a3b8; }
+.temp-dot.morno { background:#fbbf24; }
+.temp-dot.quente { background:var(--red); }
+
+/* SECTION HEADER */
+.section-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; flex-wrap:wrap; gap:12px; }
+.section-header h2 { font-family:'Syne',sans-serif; font-size:16px; font-weight:800; }
+
+/* LEAD PROFILE */
+.lead-profile { display:grid; grid-template-columns:1fr 2fr; gap:20px; }
+.lead-info-card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius); padding:20px; }
+.lead-avatar-big { width:64px; height:64px; border-radius:50%; background:linear-gradient(135deg,var(--accent),var(--purple));
+  display:flex; align-items:center; justify-content:center; font-size:24px; font-weight:700; color:#000; margin-bottom:14px; }
+.lead-name { font-family:'Syne',sans-serif; font-size:20px; font-weight:800; margin-bottom:4px; }
+.info-row { display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--border); font-size:13px; }
+.info-row:last-child { border-bottom:none; }
+.info-row i { width:16px; color:var(--accent); }
+.info-row span { color:var(--text2); }
+.info-row strong { margin-left:auto; text-align:right; }
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login-screen">
+  <div class="login-box">
+    <div class="login-logo">
+      <div class="icon">🏠</div>
+      <h1>ImobiCRM <span style="color:var(--accent)">Pro</span></h1>
+      <p>CRM Imobiliário para Corretores</p>
+    </div>
+    <label>E-mail</label>
+    <input type="email" id="login-email" value="admin@crm.com" placeholder="seu@email.com">
+    <label>Senha</label>
+    <input type="password" id="login-senha" value="admin123" placeholder="••••••••">
+    <button class="btn-login" onclick="fazerLogin()">Entrar no CRM</button>
+    <div class="login-error" id="login-error"></div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app" style="display:none">
+  <!-- SIDEBAR -->
+  <nav id="sidebar">
+    <div class="sidebar-logo">
+      <div class="brand">
+        <div class="brand-icon">🏠</div>
+        <h2>Imobi<span>CRM</span></h2>
+      </div>
+    </div>
+
+    <div class="nav-section">Principal</div>
+    <a class="nav-item active" onclick="nav('dashboard')"><i class="fas fa-chart-pie"></i><span>Dashboard</span></a>
+    <a class="nav-item" onclick="nav('leads')"><i class="fas fa-users"></i><span>Leads</span><span class="nav-badge" id="badge-leads">0</span></a>
+    <a class="nav-item" onclick="nav('kanban')"><i class="fas fa-columns"></i><span>Funil Kanban</span></a>
+    <a class="nav-item" onclick="nav('negocios')"><i class="fas fa-handshake"></i><span>Negócios</span></a>
+    <a class="nav-item" onclick="nav('tarefas')"><i class="fas fa-tasks"></i><span>Tarefas</span><span class="nav-badge" id="badge-tarefas">0</span></a>
+
+    <div class="nav-section" style="margin-top:8px">Imóveis</div>
+    <a class="nav-item" onclick="nav('empreendimentos')"><i class="fas fa-building"></i><span>Empreendimentos</span></a>
+    <a class="nav-item" onclick="nav('construtoras')"><i class="fas fa-hard-hat"></i><span>Construtoras</span></a>
+    <a class="nav-item" onclick="nav('unidades')"><i class="fas fa-th"></i><span>Tabelão / Unidades</span></a>
+    <a class="nav-item" onclick="nav('importar')"><i class="fas fa-file-import"></i><span>Importar Dados</span></a>
+
+    <div class="nav-section" style="margin-top:8px">Financeiro</div>
+    <a class="nav-item" onclick="nav('comissoes')"><i class="fas fa-dollar-sign"></i><span>Comissões</span></a>
+
+    <div class="nav-section" style="margin-top:8px">Marketing</div>
+    <a class="nav-item" onclick="nav('whatsapp')"><i class="fab fa-whatsapp"></i><span>Disparo WhatsApp</span></a>
+
+    <div class="nav-section" style="margin-top:8px">Sistema</div>
+    <a class="nav-item" onclick="nav('configuracoes')"><i class="fas fa-cog"></i><span>Configurações</span></a>
+
+    <div class="sidebar-footer">
+      <div class="user-pill">
+        <div class="user-avatar" id="user-avatar">A</div>
+        <div class="user-info">
+          <p id="user-nome">Admin</p>
+          <span>Corretor</span>
+        </div>
+        <button class="btn-logout" onclick="logout()" title="Sair"><i class="fas fa-sign-out-alt"></i></button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- MAIN CONTENT -->
+  <main id="main">
+    <div class="topbar">
+      <h1 id="page-title">Dashboard</h1>
+      <div class="topbar-actions" id="topbar-actions"></div>
+    </div>
+    <div class="content" id="content"></div>
+  </main>
+</div>
+
+<!-- MODAL CONTAINER -->
+<div id="modal-container"></div>
+
+<script>
+// ══════════════════════════════════════════════
+// API
+// ══════════════════════════════════════════════
+const api = async (method, url, body=null) => {
+  const opts = { method, headers:{'Content-Type':'application/json'}, credentials:'include' };
+  if(body) opts.body = JSON.stringify(body);
+  const r = await fetch('/api'+url, opts);
+  return r.json();
+};
+const GET = url => api('GET', url);
+const POST = (url,b) => api('POST', url, b);
+const PUT = (url,b) => api('PUT', url, b);
+const DEL = url => api('DELETE', url);
+
+// ══════════════════════════════════════════════
+// AUTH
+// ══════════════════════════════════════════════
+async function fazerLogin() {
+  const email = document.getElementById('login-email').value;
+  const senha = document.getElementById('login-senha').value;
+  const r = await POST('/login', {email, senha});
+  if(r.success) {
+    document.getElementById('login-screen').style.display='none';
+    document.getElementById('app').style.display='flex';
+    document.getElementById('user-nome').textContent = r.nome;
+    document.getElementById('user-avatar').textContent = r.nome[0].toUpperCase();
+    nav('dashboard');
+  } else {
+    document.getElementById('login-error').textContent = r.error || 'Erro ao fazer login';
+  }
+}
+async function logout() {
+  await POST('/logout');
+  location.reload();
+}
+document.getElementById('login-senha').addEventListener('keypress', e => e.key==='Enter' && fazerLogin());
+
+// ══════════════════════════════════════════════
+// NAVIGATION
+// ══════════════════════════════════════════════
+const pages = {
+  dashboard: renderDashboard,
+  leads: renderLeads,
+  kanban: renderKanban,
+  negocios: renderNegocios,
+  tarefas: renderTarefas,
+  empreendimentos: renderEmpreendimentos,
+  construtoras: renderConstrutoras,
+  comissoes: renderComissoes,
+  whatsapp: renderWhatsapp,
+  unidades: renderUnidades,
+  importar: renderImportar,
+  configuracoes: renderConfiguracoes,
+};
+const titles = {
+  dashboard:'Dashboard', leads:'Leads', kanban:'Funil Kanban',
+  negocios:'Negócios', tarefas:'Tarefas', empreendimentos:'Empreendimentos',
+  construtoras:'Construtoras', comissoes:'Comissões', whatsapp:'Disparo WhatsApp',
+  unidades:'Tabelão / Unidades', importar:'Importar Dados',
+  configuracoes:'Configurações'
+};
+let currentPage = '';
+function nav(page) {
+  currentPage = page;
+  document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(i => {
+    if(i.getAttribute('onclick') === `nav('${page}')`) i.classList.add('active');
+  });
+  document.getElementById('page-title').textContent = titles[page]||page;
+  document.getElementById('topbar-actions').innerHTML = '';
+  document.getElementById('content').innerHTML = '<div style="text-align:center;padding:60px;color:var(--text3)"><i class="fas fa-spinner fa-spin" style="font-size:24px"></i></div>';
+  pages[page]?.();
+}
+
+// ══════════════════════════════════════════════
+// MODAL
+// ══════════════════════════════════════════════
+function modal(title, bodyHtml, footerHtml='', size='') {
+  document.getElementById('modal-container').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+      <div class="modal ${size} fade-in">
+        <div class="modal-header">
+          <h2>${title}</h2>
+          <button class="modal-close" onclick="closeModal()">×</button>
+        </div>
+        <div class="modal-body">${bodyHtml}</div>
+        ${footerHtml ? `<div class="modal-footer">${footerHtml}</div>` : ''}
+      </div>
+    </div>`;
+}
+function closeModal() {
+  document.getElementById('modal-container').innerHTML = '';
+}
+
+// ══════════════════════════════════════════════
+// UTILS
+// ══════════════════════════════════════════════
+const fmt = v => v ? `R$ ${Number(v).toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:0})}` : '—';
+const fmtDate = d => d ? new Date(d+'T00:00:00').toLocaleDateString('pt-BR') : '—';
+const statusBadge = s => {
+  const m = {Novo:'novo',Contato:'contato',Visita:'visita',Proposta:'proposta',Contrato:'contrato',Fechado:'fechado',Perdido:'perdido'};
+  return `<span class="badge badge-${m[s]||'novo'}">${s}</span>`;
+};
+const tempBadge = t => `<span class="badge badge-${(t||'frio').toLowerCase()}"><span class="temp-dot ${(t||'frio').toLowerCase()}"></span>${t||'Frio'}</span>`;
+const tipoBadge = t => `<span class="badge badge-${t==='QuintoAndar'?'quintoandar':'lancamento'}">${t}</span>`;
+
+// ══════════════════════════════════════════════
+// DASHBOARD
+// ══════════════════════════════════════════════
+async function renderDashboard() {
+  const d = await GET('/dashboard');
+  const s = d.stats;
+
+  // Update badges
+  document.getElementById('badge-leads').textContent = s.leads_novos||'';
+  document.getElementById('badge-tarefas').textContent = (s.tarefas_hoje+s.tarefas_atrasadas)||'';
+
+  const funil_cores = ['#3b82f6','#e8a020','#a855f7','#f5c842','#22c55e','#22c55e','#ef4444'];
+  const max_funil = Math.max(...d.funil.map(f=>f.total), 1);
+
+  const origens_html = d.origens.map(o => `
+    <div class="funil-bar">
+      <div class="funil-label" style="color:var(--text)">${o.origem||'Direto'}</div>
+      <div class="funil-track"><div class="funil-fill" style="width:${(o.total/d.origens[0].total)*100}%;background:var(--accent)">${o.total}</div></div>
+    </div>`).join('');
+
+  const funil_html = d.funil.map((f,i) => `
+    <div class="funil-bar">
+      <div class="funil-label">${f.status}</div>
+      <div class="funil-track"><div class="funil-fill" style="width:${(f.total/max_funil)*100}%;background:${funil_cores[i]}">${f.total}</div></div>
+      <div class="funil-total">${f.total}</div>
+    </div>`).join('');
+
+  const leads_html = d.ultimos_leads.map(l => `
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)">
+      <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--purple));display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#000;flex-shrink:0">${l.nome[0]}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:13px;cursor:pointer;color:var(--accent)" onclick="abrirLead(${l.id})">${l.nome}</div>
+        <div style="font-size:11px;color:var(--text2)">${l.telefone||''} ${l.empreendimento ? '• '+l.empreendimento : ''}</div>
+      </div>
+      ${statusBadge(l.status)}
+    </div>`).join('');
+
+  const tarefas_html = d.tarefas.length ? d.tarefas.map(t => `
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
+      <div style="width:8px;height:8px;border-radius:50%;flex-shrink:0;background:${t.prioridade==='Alta'?'var(--red)':t.prioridade==='Media'?'var(--accent)':'var(--text3)'}"></div>
+      <div style="flex:1"><div style="font-size:13px;font-weight:500">${t.titulo}</div><div style="font-size:11px;color:var(--text2)">${t.lead_nome||''}</div></div>
+      <button class="btn btn-sm btn-success" onclick="concluirTarefa(${t.id})">✓</button>
+    </div>`).join('') : '<div class="empty-state" style="padding:20px"><p>Nenhuma tarefa hoje!</p></div>';
+
+  document.getElementById('content').innerHTML = `
+    <div class="stats-grid">
+      <div class="stat-card gold">
+        <div class="stat-label">Leads Total</div>
+        <div class="stat-value">${s.leads_total}</div>
+        <div class="stat-sub">+${s.leads_mes} este mês</div>
+        <i class="fas fa-users stat-icon"></i>
+      </div>
+      <div class="stat-card blue">
+        <div class="stat-label">Leads Novos</div>
+        <div class="stat-value">${s.leads_novos}</div>
+        <div class="stat-sub">Aguardando contato</div>
+        <i class="fas fa-user-plus stat-icon"></i>
+      </div>
+      <div class="stat-card green">
+        <div class="stat-label">Fechamentos Mês</div>
+        <div class="stat-value">${s.negocios_fechados_mes}</div>
+        <div class="stat-sub">${s.negocios_abertos} em andamento</div>
+        <i class="fas fa-handshake stat-icon"></i>
+      </div>
+      <div class="stat-card gold">
+        <div class="stat-label">VGV do Mês</div>
+        <div class="stat-value" style="font-size:20px">${fmt(s.vgv_mes)}</div>
+        <div class="stat-sub">Vendas fechadas</div>
+        <i class="fas fa-chart-line stat-icon"></i>
+      </div>
+      <div class="stat-card green">
+        <div class="stat-label">Comissão Mês</div>
+        <div class="stat-value" style="font-size:20px">${fmt(s.comissao_mes)}</div>
+        <div class="stat-sub">Realizada</div>
+        <i class="fas fa-dollar-sign stat-icon"></i>
+      </div>
+      <div class="stat-card red">
+        <div class="stat-label">Tarefas Atrasadas</div>
+        <div class="stat-value" style="color:var(--red)">${s.tarefas_atrasadas}</div>
+        <div class="stat-sub">${s.tarefas_hoje} para hoje</div>
+        <i class="fas fa-exclamation-triangle stat-icon"></i>
+      </div>
+    </div>
+
+    <div class="grid-2" style="margin-bottom:20px">
+      <div class="card">
+        <div class="card-title"><i class="fas fa-filter"></i> Funil de Vendas</div>
+        ${funil_html || '<p style="color:var(--text3);font-size:13px">Nenhum lead cadastrado</p>'}
+      </div>
+      <div class="card">
+        <div class="card-title"><i class="fas fa-chart-bar"></i> Leads por Origem</div>
+        ${origens_html || '<p style="color:var(--text3);font-size:13px">Sem dados</p>'}
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title"><i class="fas fa-clock"></i> Últimos Leads</div>
+        ${leads_html || '<div class="empty-state" style="padding:20px"><p>Nenhum lead</p></div>'}
+        <div style="margin-top:12px"><button class="btn btn-secondary btn-sm" onclick="nav('leads')">Ver todos →</button></div>
+      </div>
+      <div class="card">
+        <div class="card-title"><i class="fas fa-calendar-check"></i> Tarefas de Hoje</div>
+        ${tarefas_html}
+        <div style="margin-top:12px"><button class="btn btn-secondary btn-sm" onclick="nav('tarefas')">Ver todas →</button></div>
+      </div>
+    </div>`;
+}
+
+// ══════════════════════════════════════════════
+// LEADS
+// ══════════════════════════════════════════════
+let leadsData = [];
+async function renderLeads(filtros={}) {
+  const params = new URLSearchParams(filtros).toString();
+  leadsData = await GET('/leads' + (params ? '?'+params : ''));
+
+  document.getElementById('topbar-actions').innerHTML = `
+    <div class="search-box"><i class="fas fa-search"></i><input id="lead-search" type="text" placeholder="Buscar lead..." style="width:220px" oninput="filtrarLeads()" /></div>
+    <button class="btn btn-primary" onclick="modalNovoLead()"><i class="fas fa-plus"></i> Novo Lead</button>`;
+
+  document.getElementById('content').innerHTML = `
+    <div class="filter-chips" id="filter-chips">
+      <span class="chip active" onclick="filtroLeads(this,'')">Todos (${leadsData.length})</span>
+      <span class="chip" onclick="filtroLeads(this,'Novo','status')">Novos</span>
+      <span class="chip" onclick="filtroLeads(this,'Contato','status')">Contato</span>
+      <span class="chip" onclick="filtroLeads(this,'Visita','status')">Visita</span>
+      <span class="chip" onclick="filtroLeads(this,'Proposta','status')">Proposta</span>
+      <span class="chip" onclick="filtroLeads(this,'Fechado','status')">Fechado</span>
+      <span class="chip" style="border-color:var(--blue);color:var(--blue)" onclick="filtroLeads(this,'Lancamento','tipo_interesse')">🏗 Lançamento</span>
+      <span class="chip" style="border-color:var(--green);color:var(--green)" onclick="filtroLeads(this,'QuintoAndar','tipo_interesse')">🟢 QuintoAndar</span>
+      <span class="chip" style="border-color:var(--red);color:var(--red)" onclick="filtroLeads(this,'Quente','temperatura')">🔥 Quente</span>
+    </div>
+    <div class="table-wrap">
+      <table id="leads-table">
+        <thead><tr>
+          <th>Lead</th><th>Contato</th><th>Interesse</th><th>Temperatura</th>
+          <th>Status</th><th>Origem</th><th>Data</th><th>Ações</th>
+        </tr></thead>
+        <tbody id="leads-tbody">${renderLeadsRows(leadsData)}</tbody>
+      </table>
+    </div>`;
+}
+
+function renderLeadsRows(leads) {
+  if(!leads.length) return `<tr><td colspan="8"><div class="empty-state"><i class="fas fa-user-slash"></i><p>Nenhum lead encontrado</p></div></td></tr>`;
+  return leads.map(l => `
+    <tr>
+      <td><div style="font-weight:600;cursor:pointer;color:var(--accent)" onclick="abrirLead(${l.id})">${l.nome}</div>
+          <div style="font-size:11px;color:var(--text3)">${l.empreendimento||'—'}</div></td>
+      <td>${l.telefone||'—'}<br><span style="font-size:11px;color:var(--text3)">${l.email||''}</span></td>
+      <td>${tipoBadge(l.tipo_interesse)}</td>
+      <td>${tempBadge(l.temperatura)}</td>
+      <td>${statusBadge(l.status)}</td>
+      <td style="color:var(--text2)">${l.origem||'—'}</td>
+      <td style="color:var(--text2)">${fmtDate(l.criado_em?.split('T')[0]||l.criado_em?.split(' ')[0])}</td>
+      <td>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-sm btn-secondary btn-icon" onclick="abrirLead(${l.id})" title="Ver lead"><i class="fas fa-eye"></i></button>
+          <button class="btn btn-sm btn-secondary btn-icon" onclick="whatsappLead('${l.telefone}','${l.nome}')" title="WhatsApp"><i class="fab fa-whatsapp" style="color:#25d366"></i></button>
+        </div>
+      </td>
+    </tr>`).join('');
+}
+
+let _filtroAtivo = {};
+function filtroLeads(el, valor, campo) {
+  document.querySelectorAll('.filter-chips .chip').forEach(c=>c.classList.remove('active'));
+  el.classList.add('active');
+  _filtroAtivo = campo ? {[campo]:valor} : {};
+  const busca = document.getElementById('lead-search')?.value||'';
+  const params = {..._filtroAtivo, ...(busca?{busca}:{})};
+  renderLeads(params);
+}
+function filtrarLeads() {
+  const busca = document.getElementById('lead-search')?.value||'';
+  const params = {..._filtroAtivo, ...(busca?{busca}:{})};
+  renderLeads(params);
+}
+
+async function modalNovoLead() {
+  const emprs = await GET('/empreendimentos');
+  const opts = emprs.map(e=>`<option value="${e.id}">${e.nome}</option>`).join('');
+  modal('Novo Lead', `
+    <div class="form-grid">
+      <div class="form-group form-full"><label>Nome *</label><input id="l-nome" placeholder="Nome completo"></div>
+      <div class="form-group"><label>Telefone</label><input id="l-tel" placeholder="(11) 99999-9999"></div>
+      <div class="form-group"><label>Email</label><input id="l-email" type="email" placeholder="email@exemplo.com"></div>
+      <div class="form-group"><label>CPF</label><input id="l-cpf" placeholder="000.000.000-00"></div>
+      <div class="form-group"><label>Tipo de Interesse</label>
+        <select id="l-tipo"><option value="Lancamento">Lançamento</option><option value="QuintoAndar">QuintoAndar</option><option value="Revenda">Revenda</option></select>
+      </div>
+      <div class="form-group"><label>Empreendimento</label>
+        <select id="l-empr"><option value="">-- Selecione --</option>${opts}</select>
+      </div>
+      <div class="form-group"><label>Origem</label>
+        <select id="l-origem"><option>Direto</option><option>Instagram</option><option>Facebook</option><option>Google</option><option>Indicação</option><option>Site</option><option>Portal ImóvelWeb</option><option>OLX</option><option>Plantão</option><option>QuintoAndar</option><option>ZAP Imóveis</option><option>Viva Real</option></select>
+      </div>
+      <div class="form-group"><label>Temperatura</label>
+        <select id="l-temp"><option>Frio</option><option>Morno</option><option>Quente</option></select>
+      </div>
+      <div class="form-group"><label>Status</label>
+        <select id="l-status"><option>Novo</option><option>Contato</option><option>Visita</option><option>Proposta</option><option>Contrato</option><option>Fechado</option><option>Perdido</option></select>
+      </div>
+      <div class="form-group"><label>Valor de Interesse</label><input id="l-valor" type="number" placeholder="500000"></div>
+      <div class="form-group form-full"><label>Observações</label><textarea id="l-obs" placeholder="Detalhes sobre o lead..."></textarea></div>
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-primary" onclick="salvarNovoLead()"><i class="fas fa-save"></i> Salvar Lead</button>`);
+}
+
+async function salvarNovoLead() {
+  const nome = document.getElementById('l-nome').value.trim();
+  if(!nome) return alert('Nome é obrigatório!');
+  await POST('/leads', {
+    nome, telefone: document.getElementById('l-tel').value,
+    email: document.getElementById('l-email').value,
+    cpf: document.getElementById('l-cpf').value,
+    tipo_interesse: document.getElementById('l-tipo').value,
+    empreendimento_id: document.getElementById('l-empr').value||null,
+    origem: document.getElementById('l-origem').value,
+    temperatura: document.getElementById('l-temp').value,
+    status: document.getElementById('l-status').value,
+    valor_interesse: document.getElementById('l-valor').value||null,
+    observacoes: document.getElementById('l-obs').value
+  });
+  closeModal();
+  renderLeads();
+}
+
+async function abrirLead(id) {
+  const d = await GET(`/leads/${id}`);
+  const l = d.lead;
+  const emprs = await GET('/empreendimentos');
+  const optsE = emprs.map(e=>`<option value="${e.id}" ${l.empreendimento_id==e.id?'selected':''}>${e.nome}</option>`).join('');
+
+  modal(`Lead: ${l.nome}`, `
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab(this,'tab-info')">Informações</button>
+      <button class="tab" onclick="switchTab(this,'tab-timeline')">Histórico (${d.interacoes.length})</button>
+      <button class="tab" onclick="switchTab(this,'tab-negocios')">Negócios (${d.negocios.length})</button>
+    </div>
+
+    <div id="tab-info">
+      <div class="form-grid">
+        <div class="form-group"><label>Nome</label><input id="el-nome" value="${l.nome}"></div>
+        <div class="form-group"><label>Telefone</label><input id="el-tel" value="${l.telefone||''}"></div>
+        <div class="form-group"><label>Email</label><input id="el-email" value="${l.email||''}"></div>
+        <div class="form-group"><label>CPF</label><input id="el-cpf" value="${l.cpf||''}"></div>
+        <div class="form-group"><label>Tipo</label>
+          <select id="el-tipo"><option ${l.tipo_interesse=='Lancamento'?'selected':''}>Lancamento</option><option ${l.tipo_interesse=='QuintoAndar'?'selected':''}>QuintoAndar</option><option ${l.tipo_interesse=='Revenda'?'selected':''}>Revenda</option></select>
+        </div>
+        <div class="form-group"><label>Empreendimento</label>
+          <select id="el-empr"><option value="">-- Nenhum --</option>${optsE}</select>
+        </div>
+        <div class="form-group"><label>Origem</label>
+          <select id="el-origem"><option ${l.origem=='Direto'?'selected':''}>Direto</option><option ${l.origem=='Instagram'?'selected':''}>Instagram</option><option ${l.origem=='Facebook'?'selected':''}>Facebook</option><option ${l.origem=='Google'?'selected':''}>Google</option><option ${l.origem=='Indicação'?'selected':''}>Indicação</option><option ${l.origem=='QuintoAndar'?'selected':''}>QuintoAndar</option><option ${l.origem=='ZAP Imóveis'?'selected':''}>ZAP Imóveis</option><option ${l.origem=='Viva Real'?'selected':''}>Viva Real</option></select>
+        </div>
+        <div class="form-group"><label>Temperatura</label>
+          <select id="el-temp"><option ${l.temperatura=='Frio'?'selected':''}>Frio</option><option ${l.temperatura=='Morno'?'selected':''}>Morno</option><option ${l.temperatura=='Quente'?'selected':''}>Quente</option></select>
+        </div>
+        <div class="form-group"><label>Status</label>
+          <select id="el-status"><option ${l.status=='Novo'?'selected':''}>Novo</option><option ${l.status=='Contato'?'selected':''}>Contato</option><option ${l.status=='Visita'?'selected':''}>Visita</option><option ${l.status=='Proposta'?'selected':''}>Proposta</option><option ${l.status=='Contrato'?'selected':''}>Contrato</option><option ${l.status=='Fechado'?'selected':''}>Fechado</option><option ${l.status=='Perdido'?'selected':''}>Perdido</option></select>
+        </div>
+        <div class="form-group"><label>Valor Interesse</label><input id="el-valor" type="number" value="${l.valor_interesse||''}"></div>
+        <div class="form-group form-full"><label>Observações</label><textarea id="el-obs">${l.observacoes||''}</textarea></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-primary btn-sm" onclick="salvarLead(${id})"><i class="fas fa-save"></i> Salvar</button>
+        <button class="btn btn-success btn-sm" onclick="whatsappLead('${l.telefone}','${l.nome}')"><i class="fab fa-whatsapp"></i> WhatsApp</button>
+        <button class="btn btn-secondary btn-sm" onclick="modalNegocio(${id})"><i class="fas fa-handshake"></i> Novo Negócio</button>
+      </div>
+    </div>
+
+    <div id="tab-timeline" style="display:none">
+      <div style="margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-sm btn-secondary" onclick="registrarInteracao(${id},'Ligação','call')">📞 Registrar Ligação</button>
+        <button class="btn btn-sm btn-secondary" onclick="registrarInteracao(${id},'Email','email')">📧 Enviar E-mail</button>
+        <button class="btn btn-sm btn-secondary" onclick="registrarInteracao(${id},'Visita','visita')">🏠 Registrar Visita</button>
+        <button class="btn btn-sm btn-secondary" onclick="registrarInteracao(${id},'Nota','nota')">📝 Adicionar Nota</button>
+        <button class="btn btn-sm btn-secondary" onclick="registrarInteracao(${id},'Agendamento','agenda')">📅 Agendar</button>
+      </div>
+      <div class="timeline">
+        ${d.interacoes.map(i=>`
+          <div class="tl-item">
+            <div class="tl-dot ${tipoIcone(i.tipo)}"></div>
+            <div class="tl-content">
+              <div style="font-weight:600;font-size:13px">${i.tipo}</div>
+              <div style="margin-top:4px">${i.descricao}</div>
+              <div class="tl-meta">${i.usuario||''} • ${new Date(i.data_hora).toLocaleString('pt-BR')}</div>
+            </div>
+          </div>`).join('') || '<p style="color:var(--text3)">Nenhuma interação registrada</p>'}
+      </div>
+    </div>
+
+    <div id="tab-negocios" style="display:none">
+      <button class="btn btn-primary btn-sm" style="margin-bottom:16px" onclick="modalNegocio(${id})"><i class="fas fa-plus"></i> Novo Negócio</button>
+      ${d.negocios.map(n=>`
+        <div class="card" style="margin-bottom:12px;cursor:pointer" onclick="abrirNegocio(${n.id})">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-weight:700">${n.empreendimento||'Negócio #'+n.id}</div>
+              <div style="color:var(--text2);font-size:12px;margin-top:4px">Unidade ${n.unidade||'—'} • ${fmtDate(n.data_contrato)}</div>
+            </div>
+            <div style="text-align:right">
+              <div class="valor">${fmt(n.valor_venda)}</div>
+              ${statusBadge(n.status)}
+            </div>
+          </div>
+        </div>`).join('') || '<p style="color:var(--text3)">Nenhum negócio registrado</p>'}
+    </div>`, '', 'modal-lg');
+}
+
+function tipoIcone(tipo) {
+  const m = {Ligação:'call',Email:'email',Visita:'visita'};
+  return m[tipo]||'nota';
+}
+
+async function salvarLead(id) {
+  await PUT(`/leads/${id}`, {
+    nome: document.getElementById('el-nome').value,
+    telefone: document.getElementById('el-tel').value,
+    email: document.getElementById('el-email').value,
+    cpf: document.getElementById('el-cpf').value,
+    tipo_interesse: document.getElementById('el-tipo').value,
+    empreendimento_id: document.getElementById('el-empr').value||null,
+    origem: document.getElementById('el-origem').value,
+    temperatura: document.getElementById('el-temp').value,
+    status: document.getElementById('el-status').value,
+    valor_interesse: document.getElementById('el-valor').value||null,
+    observacoes: document.getElementById('el-obs').value,
+  });
+  alert('✅ Lead salvo!');
+  closeModal();
+  renderLeads();
+}
+
+async function registrarInteracao(leadId, tipo, dotClass) {
+  const desc = prompt(`Descreva a ${tipo}:`);
+  if(!desc) return;
+  const novoStatus = prompt('Novo status do lead? (deixe em branco para manter)\nOpções: Novo, Contato, Visita, Proposta, Contrato, Fechado, Perdido');
+  await POST(`/leads/${leadId}/interacoes`, {tipo, descricao:desc, novo_status:novoStatus||null});
+  abrirLead(leadId);
+}
+
+function switchTab(btn, tabId) {
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+  ['tab-info','tab-timeline','tab-negocios'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el) el.style.display = id===tabId?'block':'none';
+  });
+}
+
+function whatsappLead(tel, nome) {
+  if(!tel) return alert('Lead sem telefone cadastrado!');
+  const n = tel.replace(/\D/g,'');
+  const msg = encodeURIComponent(`Olá ${nome}! Aqui é do CRM Imobiliário.`);
+  window.open(`https://wa.me/55${n}?text=${msg}`, '_blank');
+}
+
+// ══════════════════════════════════════════════
+// KANBAN
+// ══════════════════════════════════════════════
+async function renderKanban() {
+  const leads = await GET('/leads');
+  const colunas = ['Novo','Contato','Visita','Proposta','Contrato','Fechado'];
+  const cores = {'Novo':'var(--blue)','Contato':'var(--accent)','Visita':'var(--purple)','Proposta':'var(--accent2)','Contrato':'#4ade80','Fechado':'var(--green)'};
+
+  document.getElementById('topbar-actions').innerHTML = `
+    <button class="btn btn-primary" onclick="modalNovoLead()"><i class="fas fa-plus"></i> Novo Lead</button>`;
+
+  const kanbanHtml = colunas.map(col => {
+    const col_leads = leads.filter(l=>l.status===col);
+    return `
+      <div class="kanban-col">
+        <div class="kanban-header" style="border-top:3px solid ${cores[col]}">
+          <span style="color:${cores[col]}">${col}</span>
+          <span class="kanban-count">${col_leads.length}</span>
+        </div>
+        <div class="kanban-body">
+          ${col_leads.map(l=>`
+            <div class="kanban-card" style="border-left-color:${cores[l.temperatura==='Quente'?'red':'frio']}" onclick="abrirLead(${l.id})">
+              <div class="k-name">${l.nome}</div>
+              <div class="k-info"><i class="fas fa-phone" style="font-size:10px"></i>${l.telefone||'sem tel.'}</div>
+              ${l.empreendimento?`<div class="k-info" style="margin-top:4px"><i class="fas fa-building" style="font-size:10px"></i>${l.empreendimento}</div>`:''}
+              <div class="k-tags">
+                ${tempBadge(l.temperatura)}
+                ${tipoBadge(l.tipo_interesse)}
+              </div>
+            </div>`).join('') || `<div style="text-align:center;padding:20px;color:var(--text3);font-size:12px">Vazio</div>`}
+        </div>
+      </div>`;
+  }).join('');
+
+  document.getElementById('content').innerHTML = `<div class="kanban-board">${kanbanHtml}</div>`;
+}
+
+// ══════════════════════════════════════════════
+// NEGÓCIOS
+// ══════════════════════════════════════════════
+async function renderNegocios() {
+  const negocios = await GET('/negocios');
+  document.getElementById('topbar-actions').innerHTML = '';
+
+  const statusNeg = s => {
+    const m = {Proposta:'badge-proposta',Contrato:'badge-contrato',Fechado:'badge-fechado',Cancelado:'badge-perdido'};
+    return `<span class="badge ${m[s]||'badge-novo'}">${s}</span>`;
+  };
+
+  document.getElementById('content').innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Lead</th><th>Empreendimento</th><th>Tipo</th><th>Valor Venda</th>
+          <th>Comissão</th><th>Status</th><th>Contrato</th><th>Chaves</th><th>Financ.</th><th>Ações</th>
+        </tr></thead>
+        <tbody>
+          ${negocios.length ? negocios.map(n=>`
+            <tr>
+              <td><div style="font-weight:600">${n.lead_nome||'—'}</div><div style="font-size:11px;color:var(--text2)">${n.lead_tel||''}</div></td>
+              <td>${n.empreendimento||'—'}</td>
+              <td>${tipoBadge(n.tipo)}</td>
+              <td class="valor">${fmt(n.valor_venda)}</td>
+              <td class="valor" style="color:var(--green)">${fmt(n.valor_comissao)}</td>
+              <td>${statusNeg(n.status)}</td>
+              <td style="color:var(--text2)">${fmtDate(n.data_contrato)}</td>
+              <td style="color:var(--text2)">${fmtDate(n.data_previsao_chaves)}</td>
+              <td>${n.financiamento ? '<span class="badge badge-blue">Sim</span>' : '—'}</td>
+              <td><button class="btn btn-sm btn-secondary btn-icon" onclick="abrirNegocio(${n.id})"><i class="fas fa-eye"></i></button></td>
+            </tr>`).join('') : `<tr><td colspan="10"><div class="empty-state"><i class="fas fa-handshake"></i><p>Nenhum negócio cadastrado</p></div></td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+async function abrirNegocio(id) {
+  const d = await GET(`/negocios/${id}`);
+  const n = d.negocio;
+  const c = d.comissao||{};
+  const emprs = await GET('/empreendimentos');
+  const optsE = emprs.map(e=>`<option value="${e.id}" ${n.empreendimento_id==e.id?'selected':''}>${e.nome}</option>`).join('');
+
+  modal(`Negócio #${id} — ${n.lead_nome}`, `
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab(this,'neg-info')">Negócio</button>
+      <button class="tab" onclick="switchTab(this,'neg-financ')">Financiamento</button>
+      <button class="tab" onclick="switchTab(this,'neg-comissao')">Comissão</button>
+    </div>
+    <div id="neg-info">
+      <div class="form-grid">
+        <div class="form-group"><label>Empreendimento</label><select id="n-empr"><option value="">—</option>${optsE}</select></div>
+        <div class="form-group"><label>Status</label>
+          <select id="n-status">
+            <option ${n.status=='Proposta'?'selected':''}>Proposta</option>
+            <option ${n.status=='Contrato'?'selected':''}>Contrato</option>
+            <option ${n.status=='Fechado'?'selected':''}>Fechado</option>
+            <option ${n.status=='Cancelado'?'selected':''}>Cancelado</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Unidade</label><input id="n-unidade" value="${n.unidade||''}"></div>
+        <div class="form-group"><label>Bloco</label><input id="n-bloco" value="${n.bloco||''}"></div>
+        <div class="form-group"><label>Andar</label><input id="n-andar" type="number" value="${n.andar||''}"></div>
+        <div class="form-group"><label>Número do Contrato</label><input id="n-contrato" value="${n.numero_contrato||''}"></div>
+        <div class="form-group"><label>Valor de Venda (R$)</label><input id="n-valor" type="number" value="${n.valor_venda||''}" oninput="calcComissao()"></div>
+        <div class="form-group"><label>% Comissão</label><input id="n-perc" type="number" step="0.1" value="${n.percentual_comissao||0.5}" oninput="calcComissao()"></div>
+        <div class="form-group"><label>Valor Comissão (R$)</label><input id="n-comissao" type="number" value="${n.valor_comissao||''}"></div>
+        <div class="form-group"><label>Data Proposta</label><input id="n-dprop" type="date" value="${n.data_proposta||''}"></div>
+        <div class="form-group"><label>Data Contrato</label><input id="n-dcont" type="date" value="${n.data_contrato||''}"></div>
+        <div class="form-group"><label>Previsão de Chaves</label><input id="n-dchaves" type="date" value="${n.data_previsao_chaves||''}"></div>
+        <div class="form-group"><label>Entrega de Chaves</label><input id="n-dentrega" type="date" value="${n.data_entrega_chaves||''}"></div>
+        <div class="form-group form-full"><label>Observações</label><textarea id="n-obs">${n.observacoes||''}</textarea></div>
+      </div>
+    </div>
+    <div id="neg-financ" style="display:none">
+      <div class="form-grid">
+        <div class="form-group form-full">
+          <label>Possui Financiamento?</label>
+          <select id="n-financ"><option value="0" ${!n.financiamento?'selected':''}>Não</option><option value="1" ${n.financiamento?'selected':''}>Sim</option></select>
+        </div>
+        <div class="form-group"><label>Banco</label><input id="n-banco" value="${n.banco_financiamento||''}"></div>
+        <div class="form-group"><label>Valor Entrada (R$)</label><input id="n-entrada" type="number" value="${n.valor_entrada||''}"></div>
+        <div class="form-group"><label>Valor Financiado (R$)</label><input id="n-financiado" type="number" value="${n.valor_financiado||''}"></div>
+        <div class="form-group"><label>Data Aprovação</label><input id="n-daprov" type="date" value="${n.data_aprovacao_financiamento||''}"></div>
+      </div>
+    </div>
+    <div id="neg-comissao" style="display:none">
+      <div class="card" style="margin-bottom:16px">
+        <div style="display:flex;gap:20px;flex-wrap:wrap">
+          <div><div class="stat-label">Total Comissão</div><div class="valor" style="font-size:20px">${fmt(c.valor_total)}</div></div>
+          <div><div class="stat-label">Já Recebido</div><div class="valor" style="font-size:20px;color:var(--green)">${fmt(c.valor_recebido)}</div></div>
+          <div><div class="stat-label">A Receber</div><div class="valor" style="font-size:20px;color:var(--red)">${fmt((c.valor_total||0)-(c.valor_recebido||0))}</div></div>
+        </div>
+        ${c.valor_total ? `<div class="progress-bar" style="margin-top:12px"><div class="progress-fill" style="width:${Math.min(100,((c.valor_recebido||0)/(c.valor_total||1))*100)}%"></div></div>` : ''}
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Status Comissão</label>
+          <select id="c-status"><option ${c.status=='Pendente'?'selected':''}>Pendente</option><option ${c.status=='Parcial'?'selected':''}>Parcial</option><option ${c.status=='Pago'?'selected':''}>Pago</option></select>
+        </div>
+        <div class="form-group"><label>Valor Recebido (R$)</label><input id="c-recebido" type="number" value="${c.valor_recebido||0}"></div>
+        <div class="form-group"><label>Previsão Pagamento</label><input id="c-prev" type="date" value="${c.data_previsao||''}"></div>
+        <div class="form-group"><label>Data Recebimento</label><input id="c-drec" type="date" value="${c.data_recebimento||''}"></div>
+        <div class="form-group form-full"><label>Observações</label><textarea id="c-obs">${c.observacoes||''}</textarea></div>
+      </div>
+      ${c.id ? `<button class="btn btn-primary btn-sm" onclick="salvarComissao(${c.id})"><i class="fas fa-save"></i> Salvar Comissão</button>` : ''}
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Fechar</button>
+     <button class="btn btn-primary" onclick="salvarNegocio(${id})"><i class="fas fa-save"></i> Salvar Negócio</button>`, 'modal-lg');
+}
+
+function calcComissao() {
+  const valor = parseFloat(document.getElementById('n-valor')?.value)||0;
+  const perc = parseFloat(document.getElementById('n-perc')?.value)||0;
+  const comissao = valor * perc / 100;
+  const el = document.getElementById('n-comissao');
+  if(el) el.value = comissao.toFixed(2);
+}
+
+async function salvarNegocio(id) {
+  await PUT(`/negocios/${id}`, {
+    status: document.getElementById('n-status').value,
+    valor_venda: document.getElementById('n-valor').value,
+    valor_comissao: document.getElementById('n-comissao').value,
+    percentual_comissao: document.getElementById('n-perc').value,
+    data_proposta: document.getElementById('n-dprop').value,
+    data_contrato: document.getElementById('n-dcont').value,
+    data_previsao_chaves: document.getElementById('n-dchaves').value,
+    data_entrega_chaves: document.getElementById('n-dentrega').value,
+    numero_contrato: document.getElementById('n-contrato').value,
+    unidade: document.getElementById('n-unidade').value,
+    bloco: document.getElementById('n-bloco').value,
+    andar: document.getElementById('n-andar').value,
+    financiamento: document.getElementById('n-financ').value,
+    banco_financiamento: document.getElementById('n-banco').value,
+    valor_entrada: document.getElementById('n-entrada').value,
+    valor_financiado: document.getElementById('n-financiado').value,
+    data_aprovacao_financiamento: document.getElementById('n-daprov').value,
+    observacoes: document.getElementById('n-obs').value,
+  });
+  alert('✅ Negócio salvo!');
+  closeModal();
+  renderNegocios();
+}
+
+async function salvarComissao(id) {
+  await PUT(`/comissoes/${id}`, {
+    status: document.getElementById('c-status').value,
+    valor_recebido: document.getElementById('c-recebido').value,
+    data_previsao: document.getElementById('c-prev').value,
+    data_recebimento: document.getElementById('c-drec').value,
+    observacoes: document.getElementById('c-obs').value,
+  });
+  alert('✅ Comissão atualizada!');
+}
+
+async function modalNegocio(leadId) {
+  const emprs = await GET('/empreendimentos');
+  const optsE = emprs.map(e=>`<option value="${e.id}">${e.nome}</option>`).join('');
+  modal('Novo Negócio', `
+    <div class="form-grid">
+      <div class="form-group form-full"><label>Empreendimento</label><select id="mn-empr"><option value="">— Selecione —</option>${optsE}</select></div>
+      <div class="form-group"><label>Tipo</label><select id="mn-tipo"><option>Lancamento</option><option>QuintoAndar</option><option>Revenda</option></select></div>
+      <div class="form-group"><label>Status</label><select id="mn-status"><option>Proposta</option><option>Contrato</option><option>Fechado</option></select></div>
+      <div class="form-group"><label>Unidade</label><input id="mn-unidade" placeholder="101"></div>
+      <div class="form-group"><label>Bloco</label><input id="mn-bloco" placeholder="A"></div>
+      <div class="form-group"><label>Valor Venda (R$)</label><input id="mn-valor" type="number" placeholder="500000" oninput="calcNovaNegocioComissao()"></div>
+      <div class="form-group"><label>% Comissão</label><input id="mn-perc" type="number" step="0.1" value="0.5" oninput="calcNovaNegocioComissao()"></div>
+      <div class="form-group"><label>Comissão (R$)</label><input id="mn-comissao" type="number"></div>
+      <div class="form-group"><label>Data Proposta</label><input id="mn-dprop" type="date"></div>
+      <div class="form-group"><label>Data Contrato</label><input id="mn-dcont" type="date"></div>
+      <div class="form-group"><label>Previsão Chaves</label><input id="mn-dchaves" type="date"></div>
+      <div class="form-group"><label>Financiamento?</label><select id="mn-financ"><option value="0">Não</option><option value="1">Sim</option></select></div>
+      <div class="form-group form-full"><label>Observações</label><textarea id="mn-obs"></textarea></div>
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-primary" onclick="criarNegocio(${leadId})"><i class="fas fa-plus"></i> Criar Negócio</button>`);
+}
+
+function calcNovaNegocioComissao() {
+  const v = parseFloat(document.getElementById('mn-valor')?.value)||0;
+  const p = parseFloat(document.getElementById('mn-perc')?.value)||0;
+  const el = document.getElementById('mn-comissao');
+  if(el) el.value = (v*p/100).toFixed(2);
+}
+
+async function criarNegocio(leadId) {
+  await POST('/negocios', {
+    lead_id: leadId,
+    empreendimento_id: document.getElementById('mn-empr').value||null,
+    tipo: document.getElementById('mn-tipo').value,
+    status: document.getElementById('mn-status').value,
+    unidade: document.getElementById('mn-unidade').value,
+    bloco: document.getElementById('mn-bloco').value,
+    valor_venda: document.getElementById('mn-valor').value,
+    percentual_comissao: document.getElementById('mn-perc').value,
+    valor_comissao: document.getElementById('mn-comissao').value,
+    data_proposta: document.getElementById('mn-dprop').value,
+    data_contrato: document.getElementById('mn-dcont').value,
+    data_previsao_chaves: document.getElementById('mn-dchaves').value,
+    financiamento: document.getElementById('mn-financ').value,
+    observacoes: document.getElementById('mn-obs').value,
+  });
+  alert('✅ Negócio criado!');
+  closeModal();
+  abrirLead(leadId);
+}
+
+// ══════════════════════════════════════════════
+// TAREFAS
+// ══════════════════════════════════════════════
+async function renderTarefas() {
+  const tarefas = await GET('/tarefas');
+  const leads = await GET('/leads');
+  const opts = leads.map(l=>`<option value="${l.id}">${l.nome}</option>`).join('');
+  const hoje = new Date().toISOString().split('T')[0];
+
+  document.getElementById('topbar-actions').innerHTML = `
+    <button class="btn btn-primary" onclick="modalNovaTarefa('${opts}')"><i class="fas fa-plus"></i> Nova Tarefa</button>`;
+
+  const atrasadas = tarefas.filter(t=>t.status==='Pendente' && t.data_vencimento && t.data_vencimento.split('T')[0]<hoje);
+  const hoje_t = tarefas.filter(t=>t.status==='Pendente' && t.data_vencimento?.split('T')[0]===hoje);
+  const proximas = tarefas.filter(t=>t.status==='Pendente' && (!t.data_vencimento || t.data_vencimento.split('T')[0]>hoje));
+  const concluidas = tarefas.filter(t=>t.status==='Concluida');
+
+  const renderGrupo = (titulo, cor, lista) => lista.length ? `
+    <div style="margin-bottom:24px">
+      <div style="font-family:'Syne',sans-serif;font-weight:700;font-size:13px;color:${cor};margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">${titulo} (${lista.length})</div>
+      ${lista.map(t=>`
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--card);border:1px solid var(--border);border-radius:10px;margin-bottom:8px;border-left:3px solid ${t.prioridade==='Alta'?'var(--red)':t.prioridade==='Media'?'var(--accent)':'var(--border)'}">
+          <button class="btn btn-sm btn-success btn-icon" onclick="concluirTarefa(${t.id})" title="Concluir"><i class="fas fa-check"></i></button>
+          <div style="flex:1">
+            <div style="font-weight:600">${t.titulo}</div>
+            <div style="font-size:11px;color:var(--text2)">${t.lead_nome||''} ${t.data_vencimento ? '• '+fmtDate(t.data_vencimento.split('T')[0]) : ''}</div>
+          </div>
+          <span class="badge badge-${t.prioridade==='Alta'?'perdido':t.prioridade==='Media'?'morno':'frio'}">${t.prioridade}</span>
+          <button class="btn btn-sm btn-danger btn-icon" onclick="deletarTarefa(${t.id})"><i class="fas fa-trash"></i></button>
+        </div>`).join('')}
+    </div>` : '';
+
+  document.getElementById('content').innerHTML = `
+    ${renderGrupo('⚠ Atrasadas','var(--red)',atrasadas)}
+    ${renderGrupo('📅 Para Hoje','var(--accent)',hoje_t)}
+    ${renderGrupo('📋 Próximas','var(--text)',proximas)}
+    ${renderGrupo('✅ Concluídas','var(--green)',concluidas.slice(0,10))}
+    ${!tarefas.length ? '<div class="empty-state"><i class="fas fa-tasks"></i><p>Nenhuma tarefa cadastrada</p></div>' : ''}`;
+}
+
+function modalNovaTarefa(opts) {
+  modal('Nova Tarefa', `
+    <div class="form-grid">
+      <div class="form-group form-full"><label>Título *</label><input id="t-titulo" placeholder="Ligar para cliente..."></div>
+      <div class="form-group form-full"><label>Descrição</label><textarea id="t-desc" placeholder="Detalhes..."></textarea></div>
+      <div class="form-group"><label>Lead</label><select id="t-lead"><option value="">— Nenhum —</option>${opts}</select></div>
+      <div class="form-group"><label>Prioridade</label><select id="t-prior"><option>Alta</option><option selected>Media</option><option>Baixa</option></select></div>
+      <div class="form-group form-full"><label>Data/Hora Vencimento</label><input id="t-data" type="datetime-local"></div>
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-primary" onclick="salvarTarefa()"><i class="fas fa-plus"></i> Criar Tarefa</button>`);
+}
+
+async function salvarTarefa() {
+  const titulo = document.getElementById('t-titulo').value.trim();
+  if(!titulo) return alert('Título obrigatório!');
+  await POST('/tarefas', {
+    titulo, descricao: document.getElementById('t-desc').value,
+    lead_id: document.getElementById('t-lead').value||null,
+    prioridade: document.getElementById('t-prior').value,
+    data_vencimento: document.getElementById('t-data').value,
+  });
+  closeModal();
+  renderTarefas();
+}
+
+async function concluirTarefa(id) {
+  await PUT(`/tarefas/${id}`, {status:'Concluida'});
+  renderTarefas();
+}
+async function deletarTarefa(id) {
+  if(confirm('Deletar tarefa?')) { await DEL(`/tarefas/${id}`); renderTarefas(); }
+}
+
+// ══════════════════════════════════════════════
+// EMPREENDIMENTOS
+// ══════════════════════════════════════════════
+async function renderEmpreendimentos() {
+  const emprs = await GET('/empreendimentos');
+  const constrs = await GET('/construtoras');
+  const optsC = constrs.map(c=>`<option value="${c.id}">${c.nome}</option>`).join('');
+
+  document.getElementById('topbar-actions').innerHTML = `
+    <button class="btn btn-primary" onclick="modalNovoEmpreendimento('${optsC.replace(/'/g,"\\'")}')"><i class="fas fa-plus"></i> Novo Empreendimento</button>`;
+
+  const statusE = s => {
+    const m = {'Em Lançamento':'badge-lancamento','Em Obras':'badge-contato','Pronto':'badge-fechado','Entregue':'badge-fechado'};
+    return `<span class="badge ${m[s]||'badge-novo'}">${s}</span>`;
+  };
+
+  document.getElementById('content').innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px">
+      ${emprs.map(e=>`
+        <div class="card" style="cursor:pointer;transition:.2s" onclick="modalEditarEmpreendimento(${e.id})" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px">
+            <div>
+              <div style="font-family:'Syne',sans-serif;font-weight:800;font-size:16px">${e.nome}</div>
+              <div style="font-size:12px;color:var(--text2)">${e.construtora_nome||'Sem construtora'}</div>
+            </div>
+            ${statusE(e.status)}
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+            <div><span style="color:var(--text3)">Tipo:</span> ${e.tipo}</div>
+            <div><span style="color:var(--text3)">Leads:</span> <strong>${e.total_leads}</strong></div>
+            <div><span style="color:var(--text3)">De:</span> <span class="valor" style="font-size:12px">${fmt(e.valor_min)}</span></div>
+            <div><span style="color:var(--text3)">Até:</span> <span class="valor" style="font-size:12px">${fmt(e.valor_max)}</span></div>
+            <div><span style="color:var(--text3)">Bairro:</span> ${e.bairro||'—'}</div>
+            <div><span style="color:var(--text3)">Comissão:</span> ${e.comissao_percentual}%</div>
+          </div>
+          ${e.data_entrega ? `<div style="margin-top:10px;font-size:11px;color:var(--text3)">📅 Entrega: ${fmtDate(e.data_entrega)}</div>` : ''}
+        </div>`).join('') || '<div class="empty-state"><i class="fas fa-building"></i><p>Nenhum empreendimento cadastrado</p></div>'}
+    </div>`;
+}
+
+function modalNovoEmpreendimento(optsC) {
+  modal('Novo Empreendimento', `
+    <div class="form-grid">
+      <div class="form-group form-full"><label>Nome *</label><input id="e-nome" placeholder="Nome do empreendimento"></div>
+      <div class="form-group"><label>Construtora</label><select id="e-constr"><option value="">— Selecione —</option>${optsC}</select></div>
+      <div class="form-group"><label>Tipo</label><select id="e-tipo"><option>Apartamento</option><option>Casa</option><option>Studio</option><option>Loft</option><option>Comercial</option><option>Terreno</option></select></div>
+      <div class="form-group"><label>Status</label><select id="e-status"><option>Em Lançamento</option><option>Em Obras</option><option>Pronto</option><option>Entregue</option></select></div>
+      <div class="form-group"><label>Endereço</label><input id="e-end" placeholder="Rua, Número"></div>
+      <div class="form-group"><label>Bairro</label><input id="e-bairro" placeholder="Bairro"></div>
+      <div class="form-group"><label>Cidade</label><input id="e-cidade" placeholder="São Paulo" value="São Paulo"></div>
+      <div class="form-group"><label>Estado</label><input id="e-estado" placeholder="SP" value="SP"></div>
+      <div class="form-group"><label>Valor Mín (R$)</label><input id="e-vmin" type="number" placeholder="300000"></div>
+      <div class="form-group"><label>Valor Máx (R$)</label><input id="e-vmax" type="number" placeholder="800000"></div>
+      <div class="form-group"><label>Área Mín (m²)</label><input id="e-amin" type="number" placeholder="45"></div>
+      <div class="form-group"><label>Área Máx (m²)</label><input id="e-amax" type="number" placeholder="120"></div>
+      <div class="form-group"><label>Quartos Mín</label><input id="e-qmin" type="number" placeholder="1" value="1"></div>
+      <div class="form-group"><label>Quartos Máx</label><input id="e-qmax" type="number" placeholder="4" value="4"></div>
+      <div class="form-group"><label>Data Lançamento</label><input id="e-dlanc" type="date"></div>
+      <div class="form-group"><label>Data Entrega</label><input id="e-dent" type="date"></div>
+      <div class="form-group"><label>% Comissão</label><input id="e-comissao" type="number" step="0.1" value="0.5"></div>
+      <div class="form-group"><label>Link Material</label><input id="e-link" placeholder="https://..."></div>
+      <div class="form-group form-full"><label>Descrição</label><textarea id="e-desc" placeholder="Descrição do empreendimento..."></textarea></div>
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-primary" onclick="salvarEmpreendimento()"><i class="fas fa-save"></i> Salvar</button>`, 'modal-xl');
+}
+
+async function salvarEmpreendimento() {
+  const nome = document.getElementById('e-nome').value.trim();
+  if(!nome) return alert('Nome obrigatório!');
+  await POST('/empreendimentos', {
+    nome, construtora_id: document.getElementById('e-constr').value||null,
+    tipo: document.getElementById('e-tipo').value,
+    status: document.getElementById('e-status').value,
+    endereco: document.getElementById('e-end').value,
+    bairro: document.getElementById('e-bairro').value,
+    cidade: document.getElementById('e-cidade').value,
+    estado: document.getElementById('e-estado').value,
+    valor_min: document.getElementById('e-vmin').value,
+    valor_max: document.getElementById('e-vmax').value,
+    area_min: document.getElementById('e-amin').value,
+    area_max: document.getElementById('e-amax').value,
+    quartos_min: document.getElementById('e-qmin').value,
+    quartos_max: document.getElementById('e-qmax').value,
+    data_lancamento: document.getElementById('e-dlanc').value,
+    data_entrega: document.getElementById('e-dent').value,
+    comissao_percentual: document.getElementById('e-comissao').value,
+    link_material: document.getElementById('e-link').value,
+    descricao: document.getElementById('e-desc').value,
+  });
+  closeModal();
+  renderEmpreendimentos();
+}
+
+async function modalEditarEmpreendimento(id) {
+  const e = await GET(`/empreendimentos/${id}`);
+  const constrs = await GET('/construtoras');
+  const optsC = constrs.map(c=>`<option value="${c.id}" ${e.construtora_id==c.id?'selected':''}>${c.nome}</option>`).join('');
+  modal(`Editar: ${e.nome}`, `
+    <div class="form-grid">
+      <div class="form-group form-full"><label>Nome</label><input id="ee-nome" value="${e.nome}"></div>
+      <div class="form-group"><label>Construtora</label><select id="ee-constr"><option value="">—</option>${optsC}</select></div>
+      <div class="form-group"><label>Status</label>
+        <select id="ee-status">
+          <option ${e.status=='Em Lançamento'?'selected':''}>Em Lançamento</option>
+          <option ${e.status=='Em Obras'?'selected':''}>Em Obras</option>
+          <option ${e.status=='Pronto'?'selected':''}>Pronto</option>
+          <option ${e.status=='Entregue'?'selected':''}>Entregue</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Valor Mín</label><input id="ee-vmin" type="number" value="${e.valor_min||''}"></div>
+      <div class="form-group"><label>Valor Máx</label><input id="ee-vmax" type="number" value="${e.valor_max||''}"></div>
+      <div class="form-group"><label>Data Lançamento</label><input id="ee-dlanc" type="date" value="${e.data_lancamento||''}"></div>
+      <div class="form-group"><label>Data Entrega</label><input id="ee-dent" type="date" value="${e.data_entrega||''}"></div>
+      <div class="form-group"><label>% Comissão</label><input id="ee-comissao" type="number" step="0.1" value="${e.comissao_percentual||0.5}"></div>
+      <div class="form-group"><label>Link Material</label><input id="ee-link" value="${e.link_material||''}"></div>
+      <div class="form-group form-full"><label>Descrição</label><textarea id="ee-desc">${e.descricao||''}</textarea></div>
+    </div>`,
+    `<button class="btn btn-danger btn-sm" onclick="if(confirm('Excluir?'))DEL('/empreendimentos/${id}').then(()=>{closeModal();renderEmpreendimentos()})">🗑 Excluir</button>
+     <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-primary" onclick="atualizarEmpreendimento(${id})"><i class="fas fa-save"></i> Salvar</button>`);
+}
+
+async function atualizarEmpreendimento(id) {
+  await PUT(`/empreendimentos/${id}`, {
+    nome: document.getElementById('ee-nome').value,
+    construtora_id: document.getElementById('ee-constr').value||null,
+    status: document.getElementById('ee-status').value,
+    valor_min: document.getElementById('ee-vmin').value,
+    valor_max: document.getElementById('ee-vmax').value,
+    data_lancamento: document.getElementById('ee-dlanc').value,
+    data_entrega: document.getElementById('ee-dent').value,
+    comissao_percentual: document.getElementById('ee-comissao').value,
+    link_material: document.getElementById('ee-link').value,
+    descricao: document.getElementById('ee-desc').value,
+  });
+  closeModal();
+  renderEmpreendimentos();
+}
+
+// ══════════════════════════════════════════════
+// CONSTRUTORAS
+// ══════════════════════════════════════════════
+async function renderConstrutoras() {
+  const constrs = await GET('/construtoras');
+  document.getElementById('topbar-actions').innerHTML = `
+    <button class="btn btn-primary" onclick="modalNovaConstrutora()"><i class="fas fa-plus"></i> Nova Construtora</button>`;
+
+  document.getElementById('content').innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Construtora</th><th>CNPJ</th><th>Contato</th><th>Telefone</th><th>Empreend.</th><th>Ações</th></tr></thead>
+        <tbody>
+          ${constrs.map(c=>`
+            <tr>
+              <td><div style="font-weight:700">${c.nome}</div><div style="font-size:11px;color:var(--text3)">${c.site||''}</div></td>
+              <td style="color:var(--text2)">${c.cnpj||'—'}</td>
+              <td>${c.contato_nome||'—'}</td>
+              <td>${c.contato_telefone||'—'}</td>
+              <td><span class="badge badge-blue">${c.total_empreendimentos}</span></td>
+              <td>
+                <button class="btn btn-sm btn-secondary btn-icon" onclick="modalEditarConstrutora(${c.id})"><i class="fas fa-edit"></i></button>
+                <button class="btn btn-sm btn-danger btn-icon" style="margin-left:4px" onclick="if(confirm('Excluir?'))DEL('/construtoras/${c.id}').then(()=>renderConstrutoras())"><i class="fas fa-trash"></i></button>
+              </td>
+            </tr>`).join('') || `<tr><td colspan="6"><div class="empty-state"><i class="fas fa-hard-hat"></i><p>Nenhuma construtora cadastrada</p></div></td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function modalNovaConstrutora() {
+  modal('Nova Construtora', `
+    <div class="form-grid">
+      <div class="form-group form-full"><label>Nome *</label><input id="c-nome" placeholder="Nome da Construtora"></div>
+      <div class="form-group"><label>CNPJ</label><input id="c-cnpj" placeholder="00.000.000/0000-00"></div>
+      <div class="form-group"><label>Site</label><input id="c-site" placeholder="https://construtora.com.br"></div>
+      <div class="form-group"><label>Contato Nome</label><input id="c-cnome" placeholder="Nome do representante"></div>
+      <div class="form-group"><label>Contato Telefone</label><input id="c-ctel" placeholder="(11) 99999-9999"></div>
+      <div class="form-group"><label>Contato E-mail</label><input id="c-cemail" placeholder="contato@construtora.com"></div>
+      <div class="form-group form-full"><label>Observações</label><textarea id="c-obs" placeholder="Notas sobre a construtora..."></textarea></div>
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-primary" onclick="salvarConstrutora()"><i class="fas fa-save"></i> Salvar</button>`);
+}
+
+async function salvarConstrutora() {
+  const nome = document.getElementById('c-nome').value.trim();
+  if(!nome) return alert('Nome obrigatório!');
+  await POST('/construtoras', {
+    nome, cnpj: document.getElementById('c-cnpj').value,
+    site: document.getElementById('c-site').value,
+    contato_nome: document.getElementById('c-cnome').value,
+    contato_telefone: document.getElementById('c-ctel').value,
+    contato_email: document.getElementById('c-cemail').value,
+    observacoes: document.getElementById('c-obs').value,
+  });
+  closeModal();
+  renderConstrutoras();
+}
+
+async function modalEditarConstrutora(id) {
+  const c = await GET(`/construtoras/${id}`);
+  modal(`Editar: ${c.nome}`, `
+    <div class="form-grid">
+      <div class="form-group form-full"><label>Nome</label><input id="ec-nome" value="${c.nome}"></div>
+      <div class="form-group"><label>CNPJ</label><input id="ec-cnpj" value="${c.cnpj||''}"></div>
+      <div class="form-group"><label>Site</label><input id="ec-site" value="${c.site||''}"></div>
+      <div class="form-group"><label>Contato Nome</label><input id="ec-cnome" value="${c.contato_nome||''}"></div>
+      <div class="form-group"><label>Contato Telefone</label><input id="ec-ctel" value="${c.contato_telefone||''}"></div>
+      <div class="form-group"><label>Contato E-mail</label><input id="ec-cemail" value="${c.contato_email||''}"></div>
+      <div class="form-group form-full"><label>Observações</label><textarea id="ec-obs">${c.observacoes||''}</textarea></div>
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-primary" onclick="atualizarConstrutora(${id})"><i class="fas fa-save"></i> Salvar</button>`);
+}
+
+async function atualizarConstrutora(id) {
+  await PUT(`/construtoras/${id}`, {
+    nome: document.getElementById('ec-nome').value,
+    cnpj: document.getElementById('ec-cnpj').value,
+    site: document.getElementById('ec-site').value,
+    contato_nome: document.getElementById('ec-cnome').value,
+    contato_telefone: document.getElementById('ec-ctel').value,
+    contato_email: document.getElementById('ec-cemail').value,
+    observacoes: document.getElementById('ec-obs').value,
+  });
+  closeModal();
+  renderConstrutoras();
+}
+
+// ══════════════════════════════════════════════
+// COMISSÕES
+// ══════════════════════════════════════════════
+async function renderComissoes() {
+  const d = await GET('/comissoes');
+  const r = d.resumo;
+
+  document.getElementById('content').innerHTML = `
+    <div class="stats-grid" style="margin-bottom:24px">
+      <div class="stat-card gold"><div class="stat-label">Total Previsto</div><div class="valor" style="font-size:22px">${fmt(r.total_previsto)}</div></div>
+      <div class="stat-card green"><div class="stat-label">Já Recebido</div><div class="valor" style="font-size:22px;color:var(--green)">${fmt(r.total_recebido)}</div></div>
+      <div class="stat-card red"><div class="stat-label">A Receber</div><div class="valor" style="font-size:22px;color:var(--red)">${fmt(r.a_receber)}</div></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Lead</th><th>Empreendimento</th><th>Venda</th><th>Comissão Total</th><th>Recebido</th><th>A Receber</th><th>Status</th><th>Previsão</th></tr></thead>
+        <tbody>
+          ${d.comissoes.map(c=>`
+            <tr>
+              <td style="font-weight:600">${c.lead_nome||'—'}</td>
+              <td style="color:var(--text2)">${c.empreendimento||'—'}</td>
+              <td class="valor">${fmt(c.valor_venda)}</td>
+              <td class="valor">${fmt(c.valor_total)}</td>
+              <td class="valor" style="color:var(--green)">${fmt(c.valor_recebido)}</td>
+              <td class="valor" style="color:var(--red)">${fmt((c.valor_total||0)-(c.valor_recebido||0))}</td>
+              <td><span class="badge badge-${c.status==='Pago'?'fechado':c.status==='Parcial'?'morno':'frio'}">${c.status}</span></td>
+              <td style="color:var(--text2)">${fmtDate(c.data_previsao)}</td>
+            </tr>`).join('') || `<tr><td colspan="8"><div class="empty-state"><i class="fas fa-dollar-sign"></i><p>Nenhuma comissão registrada</p></div></td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+// ══════════════════════════════════════════════
+// WHATSAPP DISPARADOR
+// ══════════════════════════════════════════════
+let campanhaAtiva = null;
+let pollInterval = null;
+
+async function renderWhatsapp() {
+  const camps = await GET('/whatsapp/campanhas');
+  document.getElementById('topbar-actions').innerHTML = `
+    <button class="btn btn-primary" onclick="modalNovaCampanha()"><i class="fab fa-whatsapp"></i> Nova Campanha</button>`;
+
+  const statusCamp = s => {
+    const m = {Rascunho:'badge-frio',Enviando:'badge-morno',Concluido:'badge-fechado',Cancelado:'badge-perdido'};
+    return `<span class="badge ${m[s]||'badge-frio'}">${s}</span>`;
+  };
+
+  document.getElementById('content').innerHTML = `
+    <div class="card" style="margin-bottom:20px;background:linear-gradient(135deg,rgba(37,211,102,0.1),rgba(18,140,126,0.1));border-color:rgba(37,211,102,0.3)">
+      <div style="display:flex;align-items:center;gap:16px">
+        <div style="font-size:40px">📱</div>
+        <div>
+          <div style="font-family:'Syne',sans-serif;font-weight:800;font-size:16px;color:#25d366">Disparador WhatsApp</div>
+          <div style="font-size:13px;color:var(--text2)">Envie mensagens em massa para seus leads. Configure a API nas Configurações para envio real (Evolution API / WPPConnect). Sem API = modo simulação.</div>
+        </div>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Campanha</th><th>Status</th><th>Total</th><th>Enviados</th><th>Erros</th><th>Criada em</th><th>Ações</th></tr></thead>
+        <tbody>
+          ${camps.map(c=>`
+            <tr>
+              <td><div style="font-weight:600">${c.nome_campanha}</div><div style="font-size:11px;color:var(--text3)">${c.mensagem.substring(0,60)}${c.mensagem.length>60?'...':''}</div></td>
+              <td>${statusCamp(c.status)}</td>
+              <td>${c.total_contatos}</td>
+              <td style="color:var(--green)">${c.enviados}</td>
+              <td style="color:var(--red)">${c.erros}</td>
+              <td style="color:var(--text2)">${new Date(c.criado_em).toLocaleString('pt-BR')}</td>
+              <td style="display:flex;gap:6px">
+                ${c.status==='Rascunho' ? `<button class="btn btn-sm btn-success" onclick="iniciarCampanha(${c.id})"><i class="fas fa-play"></i> Iniciar</button>` : ''}
+                <button class="btn btn-sm btn-secondary btn-icon" onclick="verCampanha(${c.id})"><i class="fas fa-eye"></i></button>
+              </td>
+            </tr>`).join('') || `<tr><td colspan="7"><div class="empty-state"><i class="fab fa-whatsapp"></i><p>Nenhuma campanha criada</p></div></td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+async function modalNovaCampanha() {
+  modal('Nova Campanha WhatsApp', `
+    <div class="form-group" style="margin-bottom:16px">
+      <label>Nome da Campanha</label>
+      <input id="wa-nome" placeholder="Ex: Lançamento Torre A - Junho">
+    </div>
+    <div class="form-group" style="margin-bottom:16px">
+      <label>Mensagem <small style="color:var(--text3)">(use {{nome}} para personalizar)</small></label>
+      <textarea id="wa-msg" rows="5" placeholder="Olá {{nome}}! Temos uma oportunidade especial para você..."></textarea>
+    </div>
+    <div style="margin-bottom:16px">
+      <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:8px">Intervalo entre envios</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="chip active" onclick="selecionarIntervalo(this,3)" id="int-3">3 seg</button>
+        <button class="chip" onclick="selecionarIntervalo(this,5)" id="int-5">5 seg</button>
+        <button class="chip" onclick="selecionarIntervalo(this,10)" id="int-10">10 seg</button>
+        <button class="chip" onclick="selecionarIntervalo(this,30)" id="int-30">30 seg</button>
+      </div>
+      <input type="hidden" id="wa-intervalo" value="3">
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:8px">Importar Contatos</label>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button class="btn btn-sm btn-secondary" onclick="importarLeads()"><i class="fas fa-users"></i> Importar dos Leads</button>
+        <button class="btn btn-sm btn-secondary" onclick="adicionarManual()"><i class="fas fa-plus"></i> Adicionar Manual</button>
+        <button class="btn btn-sm btn-secondary" onclick="importarCSV()"><i class="fas fa-file-csv"></i> Importar CSV</button>
+      </div>
+      <div id="wa-lista" class="wa-phone-list">
+        <div style="padding:20px;text-align:center;color:var(--text3);font-size:13px">Nenhum contato adicionado</div>
+      </div>
+      <div id="wa-count" style="font-size:12px;color:var(--text3);margin-top:6px">0 contatos</div>
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-primary" onclick="criarCampanha()"><i class="fas fa-save"></i> Salvar Campanha</button>`, 'modal-lg');
+
+  window._waContatos = [];
+}
+
+function selecionarIntervalo(btn, val) {
+  document.querySelectorAll('.modal [id^="int-"]').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('wa-intervalo').value = val;
+}
+
+function atualizarListaWA() {
+  const lista = document.getElementById('wa-lista');
+  const count = document.getElementById('wa-count');
+  if(!window._waContatos?.length) {
+    lista.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px">Nenhum contato adicionado</div>';
+    count.textContent = '0 contatos';
+    return;
+  }
+  lista.innerHTML = window._waContatos.map((c,i)=>`
+    <div class="wa-phone-item">
+      <div class="wa-status pending"></div>
+      <div style="flex:1"><div style="font-size:13px;font-weight:500">${c.nome||'Sem nome'}</div><div style="font-size:11px;color:var(--text2)">${c.telefone}</div></div>
+      <button class="btn btn-danger btn-sm btn-icon" onclick="window._waContatos.splice(${i},1);atualizarListaWA()"><i class="fas fa-times"></i></button>
+    </div>`).join('');
+  count.textContent = `${window._waContatos.length} contato(s)`;
+}
+
+async function importarLeads() {
+  const leads = await GET('/leads');
+  const comTel = leads.filter(l=>l.telefone);
+  window._waContatos = [...(window._waContatos||[]), ...comTel.map(l=>({nome:l.nome,telefone:l.telefone}))];
+  // Deduplicar
+  const unique = [];
+  const seen = new Set();
+  window._waContatos.forEach(c => { if(!seen.has(c.telefone)) { seen.add(c.telefone); unique.push(c); } });
+  window._waContatos = unique;
+  atualizarListaWA();
+  alert(`✅ ${comTel.length} leads importados!`);
+}
+
+function adicionarManual() {
+  const nome = prompt('Nome (opcional):');
+  const tel = prompt('Telefone (com DDD):');
+  if(tel) {
+    window._waContatos = window._waContatos||[];
+    window._waContatos.push({nome:nome||'', telefone:tel});
+    atualizarListaWA();
+  }
+}
+
+function importarCSV() {
+  const input = document.createElement('input');
+  input.type='file'; input.accept='.csv,.txt';
+  input.onchange = e => {
+    const file = e.target.files[0];
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const lines = ev.target.result.split('\n');
+      window._waContatos = window._waContatos||[];
+      let added=0;
+      lines.forEach(line => {
+        const parts = line.split(',').map(p=>p.trim().replace(/["']/g,''));
+        if(parts.length>=1 && parts[parts.length-1].replace(/\D/g,'').length>=10) {
+          const tel = parts[parts.length-1];
+          const nome = parts.length>1 ? parts[0] : '';
+          window._waContatos.push({nome, telefone:tel});
+          added++;
+        }
+      });
+      atualizarListaWA();
+      alert(`✅ ${added} contatos importados do CSV!`);
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+async function criarCampanha() {
+  const nome = document.getElementById('wa-nome').value.trim();
+  const msg = document.getElementById('wa-msg').value.trim();
+  if(!nome || !msg) return alert('Nome e mensagem são obrigatórios!');
+  if(!window._waContatos?.length) return alert('Adicione ao menos um contato!');
+  const r = await POST('/whatsapp/campanhas', {
+    nome_campanha: nome,
+    mensagem: msg,
+    contatos: window._waContatos,
+    intervalo_segundos: parseInt(document.getElementById('wa-intervalo').value)||5
+  });
+  if(r.success) {
+    closeModal();
+    renderWhatsapp();
+    alert(`✅ Campanha criada com ${window._waContatos.length} contatos!\nAcesse a campanha para iniciar o envio.`);
+  }
+}
+
+async function iniciarCampanha(id) {
+  if(!confirm('Iniciar envio da campanha?')) return;
+  const r = await POST(`/whatsapp/campanhas/${id}/iniciar`, {});
+  if(r.success) {
+    renderWhatsapp();
+    campanhaAtiva = id;
+    verCampanha(id);
+  }
+}
+
+async function verCampanha(id) {
+  const d = await GET(`/whatsapp/campanhas/${id}`);
+  const c = d.campanha;
+  const contatos = d.contatos||[];
+  const perc = c.total_contatos ? Math.round((c.enviados/c.total_contatos)*100) : 0;
+
+  modal(`Campanha: ${c.nome_campanha}`, `
+    <div class="wa-progress">
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+        <span style="font-weight:600">${c.enviados}/${c.total_contatos} enviados</span>
+        <span style="color:var(--red)">${c.erros} erros</span>
+      </div>
+      <div class="wa-progress-bar"><div class="wa-progress-fill" id="wa-prog-fill" style="width:${perc}%"></div></div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2)">
+        <span>Status: <strong>${c.status}</strong></span><span>${perc}%</span>
+      </div>
+    </div>
+    <div style="margin-top:16px;font-size:13px;background:var(--bg2);padding:12px;border-radius:10px;border:1px solid var(--border);max-height:80px;overflow:hidden;color:var(--text2)">${c.mensagem}</div>
+    <div class="wa-phone-list" style="margin-top:12px;max-height:300px" id="wa-contatos-list">
+      ${contatos.map(ct=>`
+        <div class="wa-phone-item">
+          <div class="wa-status ${ct.status.toLowerCase()==='enviado'?'sent':ct.status.toLowerCase()==='erro'?'error':'pending'}"></div>
+          <div style="flex:1"><div style="font-size:13px">${ct.nome||ct.telefone}</div><div style="font-size:11px;color:var(--text2)">${ct.telefone}</div></div>
+          <span style="font-size:11px;color:var(--text3)">${ct.status}</span>
+        </div>`).join('')}
+    </div>
+    ${c.status==='Enviando' ? `<div style="text-align:center;margin-top:12px;color:var(--accent);font-size:13px"><i class="fas fa-circle-notch fa-spin"></i> Enviando em background... <button class="btn btn-sm btn-secondary" onclick="verCampanha(${id})" style="margin-left:8px">↻ Atualizar</button></div>` : ''}`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Fechar</button>`, 'modal-lg');
+}
+
+// ══════════════════════════════════════════════
+// TABELÃO / UNIDADES
+// ══════════════════════════════════════════════
+async function renderUnidades() {
+  const emprs = await GET('/empreendimentos');
+  const optsE = emprs.map(e=>`<option value="${e.id}">${e.nome}</option>`).join('');
+
+  document.getElementById('topbar-actions').innerHTML = `
+    <select id="u-filtro-empr" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:8px 14px;border-radius:9px;font-size:13px;outline:none;min-width:200px" onchange="carregarUnidades()">
+      <option value="">— Todos os empreendimentos —</option>${optsE}
+    </select>
+    <select id="u-filtro-disp" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:8px 14px;border-radius:9px;font-size:13px;outline:none" onchange="carregarUnidades()">
+      <option value="">Todas disponibilidades</option>
+      <option value="Disponível">✅ Disponível</option>
+      <option value="Reservado">⏳ Reservado</option>
+      <option value="Vendido">🔴 Vendido</option>
+      <option value="Bloqueado">🔒 Bloqueado</option>
+    </select>
+    <button class="btn btn-primary" onclick="modalNovaUnidade('${optsE.replace(/'/g,"\\'")}')"><i class="fas fa-plus"></i> Nova Unidade</button>`;
+
+  document.getElementById('content').innerHTML = `
+    <div id="resumo-unidades" style="margin-bottom:20px"></div>
+    <div class="table-wrap" id="tabela-unidades">
+      <div style="text-align:center;padding:40px;color:var(--text3)"><i class="fas fa-spinner fa-spin" style="font-size:20px"></i></div>
+    </div>`;
+
+  carregarUnidades();
+}
+
+async function carregarUnidades() {
+  const eid  = document.getElementById('u-filtro-empr')?.value || '';
+  const disp = document.getElementById('u-filtro-disp')?.value || '';
+  let params = [];
+  if(eid)  params.push(`empreendimento_id=${eid}`);
+  if(disp) params.push(`disponibilidade=${encodeURIComponent(disp)}`);
+  const url = '/unidades' + (params.length ? '?'+params.join('&') : '');
+  const unidades = await GET(url);
+
+  // Resumo por disponibilidade
+  const contagem = {};
+  unidades.forEach(u => { contagem[u.disponibilidade] = (contagem[u.disponibilidade]||0)+1; });
+  const coresDisp = {'Disponível':'var(--green)','Reservado':'var(--accent)','Vendido':'var(--red)','Bloqueado':'var(--text3)'};
+  const resumoEl = document.getElementById('resumo-unidades');
+  if(resumoEl) {
+    resumoEl.innerHTML = `<div style="display:flex;gap:12px;flex-wrap:wrap">
+      ${Object.entries(contagem).map(([d,n])=>`
+        <div class="stat-card" style="padding:14px 20px;min-width:140px;border-top:3px solid ${coresDisp[d]||'var(--text3)'}">
+          <div class="stat-label">${d}</div>
+          <div class="stat-value" style="font-size:24px;color:${coresDisp[d]||'var(--text3)'}">${n}</div>
+        </div>`).join('')}
+      <div class="stat-card" style="padding:14px 20px;min-width:140px;border-top:3px solid var(--blue)">
+        <div class="stat-label">Total</div>
+        <div class="stat-value" style="font-size:24px;color:var(--blue)">${unidades.length}</div>
+      </div>
+    </div>`;
+  }
+
+  const dispBadge = d => {
+    const m = {'Disponível':'badge-fechado','Reservado':'badge-contato','Vendido':'badge-perdido','Bloqueado':'badge-frio'};
+    return `<span class="badge ${m[d]||'badge-frio'}">${d}</span>`;
+  };
+
+  const tabEl = document.getElementById('tabela-unidades');
+  if(!tabEl) return;
+  if(!unidades.length) {
+    tabEl.innerHTML = `<div class="empty-state"><i class="fas fa-th"></i><p>Nenhuma unidade encontrada.<br>Importe um tabelão ou adicione manualmente.</p></div>`;
+    return;
+  }
+  tabEl.innerHTML = `<table>
+    <thead><tr>
+      <th>Empreendimento</th><th>Bloco</th><th>Andar</th><th>Unidade</th>
+      <th>Tipologia</th><th>Área Priv.</th><th>Vagas</th>
+      <th>Valor Tabela</th><th>Valor c/ Desc.</th><th>% Desc.</th>
+      <th>Disponibilidade</th><th>Ações</th>
+    </tr></thead>
+    <tbody>
+      ${unidades.map(u=>`<tr>
+        <td style="font-size:12px;color:var(--text2)">${u.empreendimento||'—'}</td>
+        <td style="font-weight:600">${u.bloco||'—'}</td>
+        <td style="text-align:center">${u.andar||'—'}</td>
+        <td style="font-weight:700;color:var(--accent)">${u.unidade}</td>
+        <td style="font-size:12px">${u.tipologia||'—'}</td>
+        <td>${u.area_privativa ? u.area_privativa+'m²' : '—'}</td>
+        <td style="text-align:center">${u.vagas||'—'}</td>
+        <td class="valor">${fmt(u.valor_tabela)}</td>
+        <td class="valor" style="color:var(--green)">${u.valor_desconto ? fmt(u.valor_desconto) : '—'}</td>
+        <td style="text-align:center;color:${u.percentual_desconto?'var(--green)':'var(--text3)'}">${u.percentual_desconto ? u.percentual_desconto.toFixed(1)+'%' : '—'}</td>
+        <td>${dispBadge(u.disponibilidade)}</td>
+        <td>
+          <button class="btn btn-sm btn-secondary btn-icon" onclick="modalEditarUnidade(${u.id},'${u.disponibilidade}')" title="Editar"><i class="fas fa-edit"></i></button>
+          <button class="btn btn-sm btn-danger btn-icon" style="margin-left:4px" onclick="if(confirm('Excluir unidade?'))DEL('/unidades/${u.id}').then(()=>carregarUnidades())" title="Excluir"><i class="fas fa-trash"></i></button>
+        </td>
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+function modalNovaUnidade(optsE) {
+  modal('Nova Unidade', `
+    <div class="form-grid cols3">
+      <div class="form-group form-full"><label>Empreendimento *</label><select id="nu-empr"><option value="">— Selecione —</option>${optsE}</select></div>
+      <div class="form-group"><label>Bloco / Torre</label><input id="nu-bloco" placeholder="A"></div>
+      <div class="form-group"><label>Andar</label><input id="nu-andar" type="number" placeholder="5"></div>
+      <div class="form-group"><label>Unidade *</label><input id="nu-und" placeholder="501"></div>
+      <div class="form-group"><label>Tipologia</label><input id="nu-tip" placeholder="2 dorms · 1 suíte · 68m²"></div>
+      <div class="form-group"><label>Quartos</label><input id="nu-qts" type="number" placeholder="2"></div>
+      <div class="form-group"><label>Suítes</label><input id="nu-sui" type="number" placeholder="1"></div>
+      <div class="form-group"><label>Banheiros</label><input id="nu-ban" type="number" placeholder="2"></div>
+      <div class="form-group"><label>Vagas</label><input id="nu-vag" type="number" placeholder="1"></div>
+      <div class="form-group"><label>Área Privativa (m²)</label><input id="nu-ap" type="number" step="0.01" placeholder="68.5"></div>
+      <div class="form-group"><label>Área Total (m²)</label><input id="nu-at" type="number" step="0.01" placeholder="78.0"></div>
+      <div class="form-group"><label>Orientação</label><input id="nu-ori" placeholder="Sol nascente"></div>
+      <div class="form-group"><label>Valor Tabela (R$)</label><input id="nu-vt" type="number" oninput="calcDesconto('nu')" placeholder="450000"></div>
+      <div class="form-group"><label>Valor c/ Desconto (R$)</label><input id="nu-vd" type="number" oninput="calcPctDesconto('nu')" placeholder="430000"></div>
+      <div class="form-group"><label>% Desconto</label><input id="nu-pct" type="number" step="0.1" oninput="calcValorDesconto('nu')" placeholder="4.4"></div>
+      <div class="form-group"><label>Disponibilidade</label>
+        <select id="nu-disp"><option>Disponível</option><option>Reservado</option><option>Vendido</option><option>Bloqueado</option></select>
+      </div>
+      <div class="form-group form-full"><label>Observações</label><textarea id="nu-obs" placeholder="Observações sobre a unidade..."></textarea></div>
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-primary" onclick="salvarNovaUnidade()"><i class="fas fa-save"></i> Salvar</button>`, 'modal-lg');
+}
+
+function calcDesconto(p) {
+  const vt = parseFloat(document.getElementById(`${p}-vt`)?.value)||0;
+  const pct = parseFloat(document.getElementById(`${p}-pct`)?.value)||0;
+  if(vt && pct) { const el=document.getElementById(`${p}-vd`); if(el) el.value=(vt*(1-pct/100)).toFixed(2); }
+}
+function calcPctDesconto(p) {
+  const vt=parseFloat(document.getElementById(`${p}-vt`)?.value)||0;
+  const vd=parseFloat(document.getElementById(`${p}-vd`)?.value)||0;
+  if(vt && vd) { const el=document.getElementById(`${p}-pct`); if(el) el.value=((vt-vd)/vt*100).toFixed(2); }
+}
+function calcValorDesconto(p) {
+  const vt=parseFloat(document.getElementById(`${p}-vt`)?.value)||0;
+  const pct=parseFloat(document.getElementById(`${p}-pct`)?.value)||0;
+  if(vt && pct) { const el=document.getElementById(`${p}-vd`); if(el) el.value=(vt*(1-pct/100)).toFixed(2); }
+}
+
+async function salvarNovaUnidade() {
+  const eid = document.getElementById('nu-empr').value;
+  const und = document.getElementById('nu-und').value.trim();
+  if(!eid || !und) return alert('Empreendimento e Unidade são obrigatórios!');
+  await POST('/unidades', {
+    empreendimento_id: eid, bloco: document.getElementById('nu-bloco').value,
+    andar: document.getElementById('nu-andar').value||null,
+    unidade: und, tipologia: document.getElementById('nu-tip').value,
+    quartos: document.getElementById('nu-qts').value||null,
+    suites: document.getElementById('nu-sui').value||null,
+    banheiros: document.getElementById('nu-ban').value||null,
+    vagas: document.getElementById('nu-vag').value||null,
+    area_privativa: document.getElementById('nu-ap').value||null,
+    area_total: document.getElementById('nu-at').value||null,
+    orientacao: document.getElementById('nu-ori').value,
+    valor_tabela: document.getElementById('nu-vt').value||null,
+    valor_desconto: document.getElementById('nu-vd').value||null,
+    percentual_desconto: document.getElementById('nu-pct').value||null,
+    disponibilidade: document.getElementById('nu-disp').value,
+    observacoes: document.getElementById('nu-obs').value,
+  });
+  closeModal(); carregarUnidades();
+}
+
+function modalEditarUnidade(id, dispAtual) {
+  const opts = ['Disponível','Reservado','Vendido','Bloqueado']
+    .map(d=>`<option ${d===dispAtual?'selected':''}>${d}</option>`).join('');
+  modal(`Editar Unidade #${id}`, `
+    <div class="form-grid">
+      <div class="form-group"><label>Disponibilidade</label><select id="eu-disp">${opts}</select></div>
+      <div class="form-group"><label>Valor Tabela (R$)</label><input id="eu-vt" type="number" oninput="calcDesconto('eu')"></div>
+      <div class="form-group"><label>Valor c/ Desconto (R$)</label><input id="eu-vd" type="number" oninput="calcPctDesconto('eu')"></div>
+      <div class="form-group"><label>% Desconto</label><input id="eu-pct" type="number" step="0.1" oninput="calcValorDesconto('eu')"></div>
+      <div class="form-group form-full"><label>Observações</label><textarea id="eu-obs"></textarea></div>
+    </div>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-primary" onclick="salvarEdicaoUnidade(${id})"><i class="fas fa-save"></i> Salvar</button>`);
+  // Carrega dados atuais
+  GET(`/unidades?empreendimento_id=0`); // só para ter o campo pronto
+}
+
+async function salvarEdicaoUnidade(id) {
+  await PUT(`/unidades/${id}`, {
+    disponibilidade: document.getElementById('eu-disp').value,
+    valor_tabela: document.getElementById('eu-vt').value||null,
+    valor_desconto: document.getElementById('eu-vd').value||null,
+    percentual_desconto: document.getElementById('eu-pct').value||null,
+    observacoes: document.getElementById('eu-obs').value,
+  });
+  closeModal(); carregarUnidades();
+}
+
+// ══════════════════════════════════════════════
+// IMPORTAR DADOS (books e tabelões via JSON/CSV)
+// ══════════════════════════════════════════════
+async function renderImportar() {
+  const emprs = await GET('/empreendimentos');
+  const hist  = await GET('/importacoes');
+  const optsE = emprs.map(e=>`<option value="${e.id}">${e.nome} (ID:${e.id})</option>`).join('');
+
+  document.getElementById('topbar-actions').innerHTML = '';
+  document.getElementById('content').innerHTML = `
+    <div class="grid-2" style="margin-bottom:24px">
+
+      <!-- Importar Empreendimentos (Book) -->
+      <div class="card">
+        <div class="card-title"><i class="fas fa-book-open" style="color:var(--blue)"></i> Importar Book / Empreendimentos</div>
+        <p style="color:var(--text2);font-size:13px;margin-bottom:16px">Cole ou faça upload de um CSV com dados dos empreendimentos extraídos pelo script <code style="color:var(--accent)">processar_arquivos.py</code>.</p>
+        <div class="form-group" style="margin-bottom:12px">
+          <label>Arquivo CSV de Empreendimentos</label>
+          <input type="file" id="imp-empr-file" accept=".csv,.json" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:9px;width:100%">
+        </div>
+        <div class="form-group" style="margin-bottom:12px">
+          <label>Ou cole JSON diretamente</label>
+          <textarea id="imp-empr-json" rows="5" placeholder='[{"nome":"Parque Vista Verde","construtora_nome":"MRV","bairro":"Penha",...}]'></textarea>
+        </div>
+        <button class="btn btn-primary" onclick="executarImportEmpreendimentos()"><i class="fas fa-upload"></i> Importar Empreendimentos</button>
+      </div>
+
+      <!-- Importar Unidades (Tabelão) -->
+      <div class="card">
+        <div class="card-title"><i class="fas fa-table" style="color:var(--accent)"></i> Importar Tabelão / Unidades</div>
+        <p style="color:var(--text2);font-size:13px;margin-bottom:16px">Cole o CSV gerado pelo script ou selecione o arquivo. Vincule ao empreendimento correto pelo ID.</p>
+        <div class="form-group" style="margin-bottom:12px">
+          <label>Empreendimento de destino *</label>
+          <select id="imp-unid-empr" style="width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:9px;font-size:13px">
+            <option value="">— Selecione o empreendimento —</option>${optsE}
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom:12px">
+          <label>Arquivo CSV / JSON de Unidades</label>
+          <input type="file" id="imp-unid-file" accept=".csv,.json" style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:9px;width:100%">
+        </div>
+        <div class="form-group" style="margin-bottom:12px">
+          <label>Ou cole JSON diretamente</label>
+          <textarea id="imp-unid-json" rows="5" placeholder='[{"bloco":"A","andar":5,"unidade":"501","valor_tabela":450000,...}]'></textarea>
+        </div>
+        <button class="btn btn-primary" onclick="executarImportUnidades()"><i class="fas fa-upload"></i> Importar Unidades</button>
+      </div>
+    </div>
+
+    <!-- Resultado da importação -->
+    <div id="imp-resultado" style="display:none" class="card" style="margin-bottom:20px"></div>
+
+    <!-- Instruções do script externo -->
+    <div class="card" style="margin-bottom:20px;border-color:rgba(59,130,246,0.4)">
+      <div class="card-title"><i class="fas fa-terminal" style="color:var(--blue)"></i> Processar PDFs e Excel com o Script</div>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:12px">Para extrair dados de PDFs, imagens e Excel das construtoras, use o script incluído no projeto:</p>
+      <div style="background:var(--bg);border-radius:10px;padding:16px;font-family:'Courier New',monospace;font-size:13px;color:var(--accent2);line-height:2">
+        <div style="color:var(--text3)"># Processar um arquivo único:</div>
+        <div>python processar_arquivos.py --arquivo book_mrv.pdf</div>
+        <div style="margin-top:8px;color:var(--text3)"># Processar uma pasta inteira:</div>
+        <div>python processar_arquivos.py --pasta ./meus_books/</div>
+        <div style="margin-top:8px;color:var(--text3)"># Modo interativo (pergunta os arquivos):</div>
+        <div>python processar_arquivos.py</div>
+      </div>
+      <p style="color:var(--text2);font-size:12px;margin-top:12px">Os arquivos gerados ficam em <code style="color:var(--accent)">./importacao_output/</code> prontos para importar aqui ou via SQL direto no banco.</p>
+    </div>
+
+    <!-- Histórico de importações -->
+    <div class="card">
+      <div class="card-title"><i class="fas fa-history"></i> Histórico de Importações</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Tipo</th><th>Arquivo</th><th>Total</th><th>Importados</th><th>Erros</th><th>Status</th><th>Data</th></tr></thead>
+          <tbody>
+            ${hist.length ? hist.map(h=>`<tr>
+              <td><span class="badge badge-${h.tipo==='book'?'blue':'lancamento'}">${h.tipo}</span></td>
+              <td style="color:var(--text2);font-size:12px">${h.arquivo_nome||'—'}</td>
+              <td style="text-align:center">${h.total_registros}</td>
+              <td style="color:var(--green);text-align:center">${h.importados}</td>
+              <td style="color:${h.erros>0?'var(--red)':'var(--text3)'};text-align:center">${h.erros}</td>
+              <td><span class="badge badge-${h.status==='Concluido'?'fechado':'perdido'}">${h.status}</span></td>
+              <td style="color:var(--text2);font-size:12px">${new Date(h.criado_em).toLocaleString('pt-BR')}</td>
+            </tr>`).join('') : `<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text3)">Nenhuma importação realizada ainda</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+async function lerArquivoImport(fileInputId, jsonInputId) {
+  const fileInput = document.getElementById(fileInputId);
+  const jsonInput = document.getElementById(jsonInputId);
+
+  // Prioriza arquivo se selecionado
+  if(fileInput?.files?.length) {
+    const file = fileInput.files[0];
+    const texto = await file.text();
+    const nome  = file.name;
+    if(nome.endsWith('.json')) {
+      try { return { dados: JSON.parse(texto), nome }; } catch(e) { alert('JSON inválido: '+e.message); return null; }
+    }
+    // CSV → parse
+    const linhas = texto.split('\n').filter(Boolean);
+    if(linhas.length < 2) { alert('CSV vazio ou sem dados.'); return null; }
+    const sep = linhas[0].includes(';') ? ';' : ',';
+    const cabecalho = linhas[0].split(sep).map(c=>c.trim().replace(/"/g,''));
+    const dados = linhas.slice(1).map(l => {
+      const vals = l.split(sep).map(v=>v.trim().replace(/"/g,''));
+      const obj = {};
+      cabecalho.forEach((c,i) => { obj[c] = vals[i]||''; });
+      return obj;
+    }).filter(r => Object.values(r).some(v=>v));
+    return { dados, nome };
+  }
+
+  // Fallback para JSON colado
+  const txt = jsonInput?.value?.trim();
+  if(!txt) { alert('Selecione um arquivo ou cole o JSON!'); return null; }
+  try { return { dados: JSON.parse(txt), nome: 'json-colado' }; }
+  catch(e) { alert('JSON inválido: '+e.message); return null; }
+}
+
+async function executarImportEmpreendimentos() {
+  const r = await lerArquivoImport('imp-empr-file', 'imp-empr-json');
+  if(!r) return;
+  mostrarResultadoImport(null, true); // loading
+  const resp = await POST('/importar/empreendimentos', {
+    empreendimentos: r.dados, fonte: r.nome
+  });
+  mostrarResultadoImport(resp, false, 'Empreendimentos');
+  if(resp.importados > 0) setTimeout(()=>nav('empreendimentos'), 2000);
+}
+
+async function executarImportUnidades() {
+  const eid = document.getElementById('imp-unid-empr').value;
+  if(!eid) { alert('Selecione o empreendimento de destino!'); return; }
+  const r = await lerArquivoImport('imp-unid-file', 'imp-unid-json');
+  if(!r) return;
+  // Injeta empreendimento_id em todas as linhas
+  const dados = r.dados.map(d => ({...d, empreendimento_id: parseInt(eid)}));
+  mostrarResultadoImport(null, true);
+  const resp = await POST('/importar/unidades', { unidades: dados, fonte: r.nome });
+  mostrarResultadoImport(resp, false, 'Unidades');
+  if(resp.importados > 0) setTimeout(()=>nav('unidades'), 2000);
+}
+
+function mostrarResultadoImport(resp, loading=false, tipo='') {
+  const el = document.getElementById('imp-resultado');
+  if(!el) return;
+  el.style.display = 'block';
+  if(loading) {
+    el.innerHTML = `<div style="text-align:center;padding:20px;color:var(--accent)"><i class="fas fa-spinner fa-spin" style="font-size:20px"></i>  Importando...</div>`;
+    return;
+  }
+  const cor  = resp.erros > 0 ? 'var(--accent)' : 'var(--green)';
+  const icon = resp.erros > 0 ? '⚠' : '✅';
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:16px">
+      <div style="font-size:32px">${icon}</div>
+      <div>
+        <div style="font-family:'Syne',sans-serif;font-size:16px;font-weight:800;color:${cor}">${tipo} — Importação concluída</div>
+        <div style="margin-top:4px;font-size:13px;color:var(--text2)">
+          <span style="color:var(--green)">✓ ${resp.importados} importados</span>
+          ${resp.erros ? `  <span style="color:var(--red)">  ✗ ${resp.erros} erros</span>` : ''}
+        </div>
+        ${resp.log?.length ? `<div style="margin-top:8px;font-size:11px;color:var(--red)">${resp.log.slice(0,3).join('<br>')}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+// ══════════════════════════════════════════════
+// CONFIGURAÇÕES
+// ══════════════════════════════════════════════
+async function renderConfiguracoes() {
+  const cfg = await GET('/configuracoes');
+  document.getElementById('content').innerHTML = `
+    <div style="max-width:600px">
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-title"><i class="fas fa-user"></i> Perfil do Corretor</div>
+        <div class="form-grid">
+          <div class="form-group form-full"><label>Nome</label><input id="cfg-nome" value="${cfg.nome_corretor||''}"></div>
+        </div>
+        <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="salvarConfig()">Salvar</button>
+      </div>
+
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-title"><i class="fab fa-whatsapp" style="color:#25d366"></i> Integração WhatsApp</div>
+        <p style="color:var(--text2);font-size:13px;margin-bottom:16px">
+          Configure a Evolution API ou WPPConnect para envio real de mensagens. Sem configuração, o sistema opera em modo simulação.
+        </p>
+        <div class="form-grid">
+          <div class="form-group form-full"><label>URL da API</label><input id="cfg-waurl" value="${cfg.whatsapp_api_url||''}" placeholder="http://localhost:8080"></div>
+          <div class="form-group form-full"><label>Token / API Key</label><input id="cfg-watoken" value="${cfg.whatsapp_token||''}" placeholder="Sua chave de API"></div>
+        </div>
+        <div class="card" style="margin-top:12px;background:var(--bg2)">
+          <div style="font-size:12px;color:var(--text2)">
+            <strong>Como configurar a Evolution API:</strong><br>
+            1. Instale: <code style="color:var(--accent)">docker run -d -p 8080:8080 atendai/evolution-api</code><br>
+            2. Acesse <code style="color:var(--accent)">http://localhost:8080/manager</code> e crie uma instância<br>
+            3. Escaneie o QR Code com seu WhatsApp<br>
+            4. Cole a URL e token acima
+          </div>
+        </div>
+        <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="salvarConfig()">Salvar Configurações</button>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><i class="fas fa-database"></i> Dados do Sistema</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn btn-secondary btn-sm" onclick="alert('Exportação em breve!')"><i class="fas fa-download"></i> Exportar Leads CSV</button>
+          <button class="btn btn-secondary btn-sm" onclick="alert('Backup em breve!')"><i class="fas fa-save"></i> Backup do Banco</button>
+        </div>
+        <p style="margin-top:12px;font-size:12px;color:var(--text3)">Banco de dados: SQLite local em /database/crm.db</p>
+      </div>
+    </div>`;
+}
+
+async function salvarConfig() {
+  await POST('/configuracoes', {
+    nome_corretor: document.getElementById('cfg-nome').value,
+    whatsapp_api_url: document.getElementById('cfg-waurl').value,
+    whatsapp_token: document.getElementById('cfg-watoken').value,
+  });
+  alert('✅ Configurações salvas!');
+}
+
+// ══════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════
+(async () => {
+  const me = await GET('/me');
+  if(me.logado) {
+    document.getElementById('login-screen').style.display='none';
+    document.getElementById('app').style.display='flex';
+    document.getElementById('user-nome').textContent = me.nome;
+    document.getElementById('user-avatar').textContent = me.nome[0].toUpperCase();
+    nav('dashboard');
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+version: "3.9"
+
+services:
+  imobicrm:
+    build: .
+    container_name: imobicrm_pro
+    ports:
+      - "5000:5000"
+    volumes:
+      # Persiste o banco de dados fora do container
+      - ./database:/app/database
+    environment:
+      - FLASK_ENV=production
+      - SECRET_KEY=mude_esta_chave_em_producao
+    restart: unless-stopped
+
+  # Opcional: Nginx como proxy reverso
+  # nginx:
+  #   image: nginx:alpine
+  #   ports:
+  #     - "80:80"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/conf.d/default.conf
+  #   depends_on:
+  #     - imobicrm
