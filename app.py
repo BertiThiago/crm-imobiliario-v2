@@ -1082,11 +1082,16 @@ def historico_importacoes():
 
 def _extract_whatsapp_message(payload):
     """
-    Extrai mensagens individuais da Evolution API,
-    incluindo casos de endereçamento LID.
+    Extrai mensagens individuais da Evolution API.
+
+    Normaliza o nome do evento porque a Evolution pode
+    entregar o payload como "messages.upsert", enquanto
+    a configuração utiliza "MESSAGES_UPSERT".
     """
 
-    event = str(payload.get("event", "")).upper()
+    event = str(
+        payload.get("event", "")
+    ).strip().upper().replace(".", "_").replace("-", "_")
 
     if event and event != "MESSAGES_UPSERT":
         return None
@@ -1098,44 +1103,45 @@ def _extract_whatsapp_message(payload):
     if key.get("fromMe", False):
         return None
 
-    remote_jid = key.get("remoteJid") or ""
-    remote_jid_alt = key.get("remoteJidAlt") or ""
+    remote_jid = str(
+        key.get("remoteJid") or ""
+    ).strip()
 
-    # ---------------------------------------------------------
-    # GRUPOS
-    # ---------------------------------------------------------
+    remote_jid_alt = str(
+        key.get("remoteJidAlt") or ""
+    ).strip()
 
+    # Ignora grupos
     if "@g.us" in remote_jid:
         return None
 
-    # ---------------------------------------------------------
-    # DESCOBRIR O TELEFONE REAL
-    # ---------------------------------------------------------
-
+    # Descobrir telefone
     candidates = [
         remote_jid,
         remote_jid_alt,
-        key.get("participantAlt") or "",
-        key.get("participant") or "",
+        str(key.get("participantAlt") or "").strip(),
+        str(key.get("participant") or "").strip(),
     ]
 
     phone = ""
 
     for candidate in candidates:
-        candidate = str(candidate).strip()
 
         if not candidate:
             continue
 
-        # Número clássico
+        # JID tradicional
         if "@s.whatsapp.net" in candidate:
-            phone = candidate.split("@")[0]
+            phone = candidate.split("@", 1)[0]
             break
 
         # Número puro
-        digits = "".join(ch for ch in candidate if ch.isdigit())
+        digits = "".join(
+            ch for ch in candidate
+            if ch.isdigit()
+        )
 
-        # LIDs numéricos não devem ser usados como telefone
+        # Não considerar LID como telefone
         if "@lid" not in candidate and len(digits) >= 10:
             phone = digits
             break
@@ -1161,7 +1167,7 @@ def _extract_whatsapp_message(payload):
 
     return {
         "phone": phone,
-        "name": push_name,
+        "name": str(push_name),
         "text": str(text)[:5000],
     }
 
