@@ -10,6 +10,18 @@ import requests
 import time
 import threading
 
+# ─────────────────────────────────────────────
+# WHATSAPP / SAFE QUEUE
+# ─────────────────────────────────────────────
+
+from whatsapp.safe_queue import (
+    register_incoming,
+    upsert_contact,
+    dashboard as safe_dashboard_data,
+    list_queue as safe_queue_list,
+    enqueue as safe_enqueue,
+)
+
 app = Flask(__name__)
 app.secret_key = 'crm_imobiliario_secret_2024'
 CORS(app)
@@ -1061,6 +1073,137 @@ def historico_importacoes():
     ).fetchall()
     conn.close()
     return jsonify([dict(r) for r in rows])
+
+
+# ─────────────────────────────────────────────
+# WHATSAPP WEBHOOK / SAFE MODE
+# ─────────────────────────────────────────────
+
+def _extract_whatsapp_message(payload):
+    """
+    Extrai os dados principais do webhook MESSAGES_UPSERT
+    da Evolution API.
+    """
+
+    event = str(payload.get("event", "")).upper()
+
+    # Ignora eventos que não sejam entrada de mensagem
+    if event and event != "MESSAGES_UPSERT":
+        return None
+
+    data = payload.get("data") or {}
+
+    key = data.get("key") or {}
+    remote_jid = key.get("remoteJid", "")
+    from_me = key.get("fromMe", False)
+
+    # Não tratar mensagens enviadas pelo próprio número como incoming
+    if from_me:
+        return None
+
+    if not remote_jid:
+        return None
+
+    # Grupos não entram no fluxo de lead individual
+    if "@g.us" in remote_jid:
+        return None
+
+    phone = remote_jid.split("@")[0].strip()
+
+    if not phone:
+        return None
+
+    push_name = (
+        data.get("pushName")
+        or data.get("notifyName")
+        or ""
+    )
+
+    message = data.get("message") or {}
+
+    text = (
+        message.get("conversation")
+        or message.get("extendedTextMessage", {}).get("text")
+        or message.get("imageMessage", {}).get("caption")
+        or message.get("videoMessage", {}).get("caption")
+        or ""
+    )
+
+    return {
+        "phone": phone,
+        "name": push_name,
+        "text": str(text)[:5000],
+    }
+
+
+@app.route('/api/whatsapp/webhook', methods=['POST'])
+def whatsapp_webhook():
+    """
+    Endpoint público chamado pela Evolution API.
+    """
+
+    payload = request.get_json(silent=True) or {}
+
+    try:
+        extracted = _extract_whatsapp_message(payload)
+
+        if extracted is None:
+            return jsonify({
+                "ok": True,
+                "ignored": True
+            })
+
+        phone = extracted["phone"]
+        name = extracted["name"]
+        text = extracted["text"]
+
+        register_incoming(
+            phone=phone,
+            name=name,
+            text=text,
+        )
+
+        return jsonify({
+            "ok": True,
+            "received": True,
+            "phone": phone,
+        })
+
+    except Exception as exc:
+        print(
+            "❌ Erro no webhook WhatsApp:",
+            repr(exc)
+        )
+
+        return jsonify({
+            "ok": False,
+            "error": str(exc),
+        }), 500
+
+
+@app.route('/api/whatsapp/safe/dashboard', methods=['GET'])
+def whatsapp_safe_dashboard():
+    return jsonify(
+        safe_dashboard_data()
+    )
+
+
+@app.route('/api/whatsapp/safe/queue', methods=['GET'])
+def whatsapp_safe_queue():
+    limit = request.args.get(
+        'limit',
+        default=100,
+        type=int
+    )
+
+    limit = min(
+        max(limit, 1),
+        500
+    )
+
+    return jsonify(
+        safe_queue_list(limit)
+    )
 
 # ─────────────────────────────────────────────
 # FRONTEND
