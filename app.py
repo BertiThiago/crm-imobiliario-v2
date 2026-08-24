@@ -1082,34 +1082,63 @@ def historico_importacoes():
 
 def _extract_whatsapp_message(payload):
     """
-    Extrai os dados principais do webhook MESSAGES_UPSERT
-    da Evolution API.
+    Extrai mensagens individuais da Evolution API,
+    incluindo casos de endereçamento LID.
     """
 
     event = str(payload.get("event", "")).upper()
 
-    # Ignora eventos que não sejam entrada de mensagem
     if event and event != "MESSAGES_UPSERT":
         return None
 
     data = payload.get("data") or {}
-
     key = data.get("key") or {}
-    remote_jid = key.get("remoteJid", "")
-    from_me = key.get("fromMe", False)
 
-    # Não tratar mensagens enviadas pelo próprio número como incoming
-    if from_me:
+    # Ignora mensagens enviadas pelo próprio número
+    if key.get("fromMe", False):
         return None
 
-    if not remote_jid:
-        return None
+    remote_jid = key.get("remoteJid") or ""
+    remote_jid_alt = key.get("remoteJidAlt") or ""
 
-    # Grupos não entram no fluxo de lead individual
+    # ---------------------------------------------------------
+    # GRUPOS
+    # ---------------------------------------------------------
+
     if "@g.us" in remote_jid:
         return None
 
-    phone = remote_jid.split("@")[0].strip()
+    # ---------------------------------------------------------
+    # DESCOBRIR O TELEFONE REAL
+    # ---------------------------------------------------------
+
+    candidates = [
+        remote_jid,
+        remote_jid_alt,
+        key.get("participantAlt") or "",
+        key.get("participant") or "",
+    ]
+
+    phone = ""
+
+    for candidate in candidates:
+        candidate = str(candidate).strip()
+
+        if not candidate:
+            continue
+
+        # Número clássico
+        if "@s.whatsapp.net" in candidate:
+            phone = candidate.split("@")[0]
+            break
+
+        # Número puro
+        digits = "".join(ch for ch in candidate if ch.isdigit())
+
+        # LIDs numéricos não devem ser usados como telefone
+        if "@lid" not in candidate and len(digits) >= 10:
+            phone = digits
+            break
 
     if not phone:
         return None
@@ -1135,7 +1164,6 @@ def _extract_whatsapp_message(payload):
         "name": push_name,
         "text": str(text)[:5000],
     }
-
 
 @app.route('/api/whatsapp/webhook', methods=['POST'])
 def whatsapp_webhook():
