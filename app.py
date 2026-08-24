@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import requests
 import time
 import threading
+from urllib.parse import urljoin
 
 # ─────────────────────────────────────────────
 # WHATSAPP / SAFE QUEUE
@@ -1204,6 +1205,71 @@ def whatsapp_safe_queue():
     return jsonify(
         safe_queue_list(limit)
     )
+
+# ─────────────────────────────────────────────
+# PROXY DA EVOLUTION API
+# ─────────────────────────────────────────────
+
+EVOLUTION_LOCAL_URL = os.getenv(
+    "EVOLUTION_LOCAL_URL",
+    "http://127.0.0.1:8081"
+)
+
+
+@app.route('/evolution/<path:path>', methods=[
+    'GET', 'POST', 'PUT', 'DELETE', 'PATCH'
+])
+def evolution_proxy(path):
+    """
+    Proxy simples do CRM para a Evolution API local.
+    Mantém a Evolution fora da Internet e usa o único
+    endpoint público do ngrok para os dois serviços.
+    """
+
+    target_url = f"{EVOLUTION_LOCAL_URL.rstrip('/')}/{path}"
+
+    try:
+        response = requests.request(
+            method=request.method,
+            url=target_url,
+            headers={
+                key: value
+                for key, value in request.headers
+                if key.lower() not in {
+                    'host',
+                    'content-length'
+                }
+            },
+            params=request.args,
+            data=request.get_data(),
+            timeout=30,
+        )
+
+        excluded_headers = {
+            'content-encoding',
+            'content-length',
+            'transfer-encoding',
+            'connection',
+        }
+
+        response_headers = [
+            (key, value)
+            for key, value in response.headers.items()
+            if key.lower() not in excluded_headers
+        ]
+
+        return (
+            response.content,
+            response.status_code,
+            response_headers
+        )
+
+    except requests.RequestException as exc:
+        return jsonify({
+            "ok": False,
+            "error": "Falha ao acessar Evolution API",
+            "detail": str(exc),
+        }), 502
 
 # ─────────────────────────────────────────────
 # FRONTEND
