@@ -21,6 +21,7 @@ from whatsapp.safe_queue import (
     dashboard as safe_dashboard_data,
     list_queue as safe_queue_list,
     enqueue as safe_enqueue,
+    update_message_status,
 )
 
 app = Flask(__name__)
@@ -1079,6 +1080,34 @@ def historico_importacoes():
 # ─────────────────────────────────────────────
 # WHATSAPP WEBHOOK / SAFE MODE
 # ─────────────────────────────────────────────
+
+event = str(
+    payload.get("event", "")
+).strip().upper().replace(".", "_").replace("-", "_")
+
+if event == "MESSAGES_UPDATE":
+
+    data = payload.get("data") or {}
+
+    evolution_message_id = (
+        data.get("keyId")
+        or data.get("id")
+    )
+
+    status = data.get("status")
+
+    updated = update_message_status(
+        evolution_message_id,
+        status
+    )
+
+    return jsonify({
+        "ok": True,
+        "event": "MESSAGES_UPDATE",
+        "updated": updated,
+        "message_id": evolution_message_id,
+        "status": status,
+    })
 
 def _extract_whatsapp_message(payload):
     """
