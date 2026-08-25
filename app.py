@@ -1081,34 +1081,6 @@ def historico_importacoes():
 # WHATSAPP WEBHOOK / SAFE MODE
 # ─────────────────────────────────────────────
 
-event = str(
-    payload.get("event", "")
-).strip().upper().replace(".", "_").replace("-", "_")
-
-if event == "MESSAGES_UPDATE":
-
-    data = payload.get("data") or {}
-
-    evolution_message_id = (
-        data.get("keyId")
-        or data.get("id")
-    )
-
-    status = data.get("status")
-
-    updated = update_message_status(
-        evolution_message_id,
-        status
-    )
-
-    return jsonify({
-        "ok": True,
-        "event": "MESSAGES_UPDATE",
-        "updated": updated,
-        "message_id": evolution_message_id,
-        "status": status,
-    })
-
 def _extract_whatsapp_message(payload):
     """
     Extrai mensagens individuais da Evolution API.
@@ -1200,6 +1172,7 @@ def _extract_whatsapp_message(payload):
         "text": str(text)[:5000],
     }
 
+
 @app.route('/api/whatsapp/webhook', methods=['POST'])
 def whatsapp_webhook():
     """
@@ -1209,7 +1182,46 @@ def whatsapp_webhook():
     payload = request.get_json(silent=True) or {}
 
     try:
-        extracted = _extract_whatsapp_message(payload)
+
+        event = str(
+            payload.get("event", "")
+        ).strip().upper().replace(".", "_").replace("-", "_")
+
+        # ─────────────────────────────────────
+        # MESSAGES_UPDATE
+        # ─────────────────────────────────────
+
+        if event == "MESSAGES_UPDATE":
+
+            data = payload.get("data") or {}
+
+            evolution_message_id = (
+                data.get("keyId")
+                or data.get("id")
+            )
+
+            status = data.get("status")
+
+            updated = update_message_status(
+                evolution_message_id,
+                status
+            )
+
+            return jsonify({
+                "ok": True,
+                "event": "MESSAGES_UPDATE",
+                "updated": updated,
+                "message_id": evolution_message_id,
+                "status": status,
+            })
+
+        # ─────────────────────────────────────
+        # MESSAGES_UPSERT
+        # ─────────────────────────────────────
+
+        extracted = _extract_whatsapp_message(
+            payload
+        )
 
         if extracted is None:
             return jsonify({
@@ -1234,6 +1246,7 @@ def whatsapp_webhook():
         })
 
     except Exception as exc:
+
         print(
             "❌ Erro no webhook WhatsApp:",
             repr(exc)
