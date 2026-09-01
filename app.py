@@ -10,6 +10,8 @@ import requests
 import time
 import threading
 from urllib.parse import urljoin
+from werkzeug.utils import secure_filename
+from pathlib import Path
 
 # ─────────────────────────────────────────────
 # WHATSAPP / SAFE QUEUE
@@ -29,6 +31,34 @@ app.secret_key = 'crm_imobiliario_secret_2024'
 CORS(app)
 
 DB_PATH = 'database/crm.db'
+
+# ─────────────────────────────────────────────
+# WHATSAPP / MÍDIAS DE CAMPANHAS
+# ─────────────────────────────────────────────
+
+MEDIA_ROOT = Path(
+    os.getenv(
+        "CRM_MEDIA_ROOT",
+        str(
+            Path(DB_PATH).parent
+            / "campanhas"
+            / "midias"
+        )
+    )
+)
+
+ALLOWED_MEDIA = {
+    "image": {
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    },
+    "video": {
+        "video/mp4",
+    },
+}
+
+MAX_MEDIA_SIZE = 64 * 1024 * 1024  # 64 MB
 
 # ─────────────────────────────────────────────
 # DATABASE
@@ -283,6 +313,86 @@ def init_db():
     ]
     for k, v in configs:
         c.execute('INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES (?, ?)', (k, v))
+
+    # ─────────────────────────────────────────
+    # MIGRAÇÃO — OPT-IN DO WHATSAPP
+    # ─────────────────────────────────────────
+
+    lead_columns = {
+        row["name"]
+        for row in c.execute(
+            "PRAGMA table_info(leads)"
+        ).fetchall()
+    }
+
+    if "whatsapp_opt_in" not in lead_columns:
+        c.execute(
+            """
+            ALTER TABLE leads
+            ADD COLUMN whatsapp_opt_in INTEGER
+            NOT NULL DEFAULT 0
+            """
+        )
+
+    if "whatsapp_opt_in_source" not in lead_columns:
+        c.execute(
+            """
+            ALTER TABLE leads
+            ADD COLUMN whatsapp_opt_in_source TEXT
+            """
+        )
+
+    if "whatsapp_opt_in_at" not in lead_columns:
+        c.execute(
+            """
+            ALTER TABLE leads
+            ADD COLUMN whatsapp_opt_in_at DATETIME
+            """
+        )
+
+    if "whatsapp_opt_out" not in lead_columns:
+        c.execute(
+            """
+            ALTER TABLE leads
+            ADD COLUMN whatsapp_opt_out INTEGER
+            NOT NULL DEFAULT 0
+            """
+        )
+
+    # ─────────────────────────────────────────
+    # MIGRAÇÃO — MÍDIA DAS CAMPANHAS
+    # ─────────────────────────────────────────
+
+    campaign_columns = {
+        row["name"]
+        for row in c.execute(
+            "PRAGMA table_info(mensagens_whatsapp)"
+        ).fetchall()
+    }
+
+    campaign_fields = {
+        "media_path": "TEXT",
+        "media_name": "TEXT",
+        "media_type": "TEXT",
+        "media_mimetype": "TEXT",
+        "media_caption": "TEXT",
+    }
+
+    for column, definition in campaign_fields.items():
+
+        if column not in campaign_columns:
+
+            c.execute(
+                f"""
+                ALTER TABLE mensagens_whatsapp
+                ADD COLUMN {column} {definition}
+                """
+            )
+
+    MEDIA_ROOT.mkdir(
+        parents=True,
+        exist_ok=True
+    )
 
     conn.commit()
     conn.close()
@@ -574,6 +684,111 @@ def lead_detail(id):
     return jsonify({'success': True})
 
 # ─────────────────────────────────────────────
+# WHATSAPP — OPT-IN MANUAL DO LEAD
+# ─────────────────────────────────────────────
+
+@app.route(
+    '/api/leads/<int:id>/whatsapp-optin',
+    methods=['PUT']
+)
+@login_required
+def atualizar_whatsapp_optin(id):
+
+    data = request.json or {}
+
+    opt_in = bool(
+        data.get("opt_in", False)
+    )
+
+    source = str(
+        data.get(
+            "source",
+            "Manual"
+        )
+    ).strip()
+
+    conn = get_db()
+
+    lead = conn.execute(
+        """
+        SELECT id, nome, telefone
+        FROM leads
+        WHERE id=?
+        """,
+        (id,)
+    ).fetchone()
+
+    if not lead:
+        conn.close()
+
+        return jsonify({
+            "success": False,
+            "error": "Lead não encontrado"
+        }), 404
+
+    now_value = (
+        datetime.now().strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        if opt_in
+        else None
+    )
+
+    conn.execute(
+        """
+        UPDATE leads
+        SET
+            whatsapp_opt_in=?,
+            whatsapp_opt_in_source=?,
+            whatsapp_opt_in_at=?,
+            whatsapp_opt_out=?,
+            atualizado_em=CURRENT_TIMESTAMP
+        WHERE id=?
+        """,
+        (
+            int(opt_in),
+            source if opt_in else "",
+            now_value,
+            0 if opt_in else 1,
+            id
+        )
+    )
+
+    conn.commit()
+    conn.close()
+
+    # Sincroniza com Safe Queue
+    telefone = str(
+        lead["telefone"] or ""
+    ).strip()
+
+    if telefone:
+
+        try:
+
+            upsert_contact(
+                phone=telefone,
+                name=lead["nome"] or "",
+                opt_in=opt_in
+            )
+
+        except Exception as exc:
+
+            print(
+                "⚠️ Falha ao sincronizar opt-in "
+                "com Safe Queue:",
+                repr(exc)
+            )
+
+    return jsonify({
+        "success": True,
+        "lead_id": id,
+        "opt_in": opt_in,
+        "source": source if opt_in else "",
+        "opt_in_at": now_value,
+    })
+
+# ─────────────────────────────────────────────
 # INTERAÇÕES
 # ─────────────────────────────────────────────
 
@@ -738,6 +953,118 @@ def tarefa_detail(id):
 # ─────────────────────────────────────────────
 # WHATSAPP DISPARADOR
 # ─────────────────────────────────────────────
+
+# ─────────────────────────────────────────────
+# WHATSAPP — UPLOAD DE MÍDIA DE CAMPANHA
+# ─────────────────────────────────────────────
+
+@app.route(
+    '/api/whatsapp/media',
+    methods=['POST']
+)
+@login_required
+def upload_whatsapp_media():
+
+    uploaded = request.files.get("file")
+
+    if not uploaded:
+        return jsonify({
+            "success": False,
+            "error": "Nenhum arquivo enviado."
+        }), 400
+
+    original_name = (
+        uploaded.filename
+        or ""
+    ).strip()
+
+    if not original_name:
+        return jsonify({
+            "success": False,
+            "error": "Nome do arquivo inválido."
+        }), 400
+
+    mimetype = (
+        uploaded.mimetype
+        or ""
+    ).lower().strip()
+
+    if mimetype in ALLOWED_MEDIA["image"]:
+        media_type = "image"
+
+    elif mimetype in ALLOWED_MEDIA["video"]:
+        media_type = "video"
+
+    else:
+        return jsonify({
+            "success": False,
+            "error": (
+                "Formato não suportado. "
+                "Use JPG, PNG, WEBP ou MP4."
+            )
+        }), 400
+
+    # Limita tamanho
+    uploaded.stream.seek(0, os.SEEK_END)
+
+    size = uploaded.stream.tell()
+
+    uploaded.stream.seek(0)
+
+    if size > MAX_MEDIA_SIZE:
+
+        return jsonify({
+            "success": False,
+            "error": (
+                "Arquivo muito grande. "
+                "Limite: 64 MB."
+            )
+        }), 413
+
+    safe_name = secure_filename(
+        original_name
+    )
+
+    extension = (
+        Path(safe_name).suffix.lower()
+    )
+
+    if not extension:
+
+        extension = (
+            ".jpg"
+            if media_type == "image"
+            else ".mp4"
+        )
+
+    stored_name = (
+        f"{uuid.uuid4().hex}"
+        f"{extension}"
+    )
+
+    destination = (
+        MEDIA_ROOT
+        / stored_name
+    )
+
+    uploaded.save(
+        destination
+    )
+
+    relative_path = str(
+        destination.relative_to(
+            MEDIA_ROOT
+        )
+    )
+
+    return jsonify({
+        "success": True,
+        "media_type": media_type,
+        "media_name": original_name,
+        "media_mimetype": mimetype,
+        "media_path": relative_path,
+        "size": size,
+    })
 
 @app.route('/api/whatsapp/campanhas', methods=['GET', 'POST'])
 @login_required
