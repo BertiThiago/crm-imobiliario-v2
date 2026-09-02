@@ -30,7 +30,31 @@ app = Flask(__name__)
 app.secret_key = 'crm_imobiliario_secret_2024'
 CORS(app)
 
-DB_PATH = 'database/crm.db'
+# ─────────────────────────────────────────────
+# DADOS PERSISTENTES
+# ─────────────────────────────────────────────
+
+CRM_DATA_ROOT = Path(
+    os.getenv(
+        "CRM_DATA_ROOT",
+        "/content/drive/MyDrive/BERTI_BOT/database"
+    )
+)
+
+# ─────────────────────────────────────────────
+# ARMAZENAMENTO PERSISTENTE
+# ─────────────────────────────────────────────
+
+CRM_DATA_ROOT = Path(
+    os.getenv(
+        "CRM_DATA_ROOT",
+        "/content/drive/MyDrive/BERTI_BOT"
+    )
+)
+
+DATABASE_ROOT = CRM_DATA_ROOT / "database"
+
+DB_PATH = DATABASE_ROOT / "crm.db"
 
 # ─────────────────────────────────────────────
 # WHATSAPP / MÍDIAS DE CAMPANHAS
@@ -40,11 +64,16 @@ MEDIA_ROOT = Path(
     os.getenv(
         "CRM_MEDIA_ROOT",
         str(
-            Path(DB_PATH).parent
+            DATABASE_ROOT
             / "campanhas"
             / "midias"
         )
     )
+)
+
+MEDIA_ROOT.mkdir(
+    parents=True,
+    exist_ok=True
 )
 
 ALLOWED_MEDIA = {
@@ -70,7 +99,16 @@ def get_db():
     return conn
 
 def init_db():
-    os.makedirs('database', exist_ok=True)
+    DATABASE_ROOT.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    MEDIA_ROOT.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
     conn = get_db()
     c = conn.cursor()
 
