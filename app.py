@@ -30,16 +30,6 @@ app = Flask(__name__)
 app.secret_key = 'crm_imobiliario_secret_2024'
 CORS(app)
 
-# ─────────────────────────────────────────────
-# DADOS PERSISTENTES
-# ─────────────────────────────────────────────
-
-CRM_DATA_ROOT = Path(
-    os.getenv(
-        "CRM_DATA_ROOT",
-        "/content/drive/MyDrive/BERTI_BOT/database"
-    )
-)
 
 # ─────────────────────────────────────────────
 # ARMAZENAMENTO PERSISTENTE
@@ -54,17 +44,30 @@ CRM_DATA_ROOT = Path(
 
 DATABASE_ROOT = CRM_DATA_ROOT / "database"
 
-DB_PATH = DATABASE_ROOT / "crm.db"
+# ============================================================
+# ARMAZENAMENTO PERSISTENTE DO CRM
+# ============================================================
 
-# ─────────────────────────────────────────────
+CRM_DATA_ROOT = Path(
+    os.getenv(
+        "CRM_DATA_ROOT",
+        "/content/drive/MyDrive/BERTI_BOT"
+    )
+)
+
+DB_PATH = CRM_DATA_ROOT / "database" / "crm.db"
+
+
+# ============================================================
 # WHATSAPP / MÍDIAS DE CAMPANHAS
-# ─────────────────────────────────────────────
+# ============================================================
 
 MEDIA_ROOT = Path(
     os.getenv(
         "CRM_MEDIA_ROOT",
         str(
-            DATABASE_ROOT
+            CRM_DATA_ROOT
+            / "database"
             / "campanhas"
             / "midias"
         )
