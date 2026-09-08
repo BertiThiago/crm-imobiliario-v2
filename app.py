@@ -1111,23 +1111,264 @@ def upload_whatsapp_media():
 @login_required
 def campanhas_whatsapp():
     conn = get_db()
-    if request.method == 'GET':
-        rows = conn.execute('SELECT * FROM mensagens_whatsapp ORDER BY criado_em DESC').fetchall()
+
+    try:
+        # ----------------------------------------------------
+        # GET — listar campanhas
+        # ----------------------------------------------------
+        if request.method == 'GET':
+            rows = conn.execute(
+                '''
+                SELECT *
+                FROM mensagens_whatsapp
+                ORDER BY criado_em DESC
+                '''
+            ).fetchall()
+
+            return jsonify([dict(r) for r in rows])
+
+        # ----------------------------------------------------
+        # POST — criar campanha
+        # ----------------------------------------------------
+        data = request.get_json(silent=True) or {}
+
+        nome_campanha = str(
+            data.get('nome_campanha', '')
+        ).strip()
+
+        mensagem = str(
+            data.get('mensagem', '')
+        )
+
+        contatos = data.get('contatos', [])
+
+        intervalo_segundos = data.get(
+            'intervalo_segundos',
+            5
+        )
+
+        # ----------------------------------------------------
+        # VALIDAÇÕES BÁSICAS
+        # ----------------------------------------------------
+
+        if not nome_campanha:
+            return jsonify({
+                'success': False,
+                'error': 'nome_campanha é obrigatório'
+            }), 400
+
+        if not isinstance(contatos, list):
+            return jsonify({
+                'success': False,
+                'error': 'contatos deve ser uma lista'
+            }), 400
+
+        try:
+            intervalo_segundos = int(intervalo_segundos)
+        except (TypeError, ValueError):
+            return jsonify({
+                'success': False,
+                'error': 'intervalo_segundos inválido'
+            }), 400
+
+        if intervalo_segundos < 0:
+            return jsonify({
+                'success': False,
+                'error': 'intervalo_segundos não pode ser negativo'
+            }), 400
+
+        # ----------------------------------------------------
+        # DADOS DA MÍDIA
+        # ----------------------------------------------------
+        # A mídia já deve ter sido enviada pelo endpoint
+        # /api/whatsapp/media.
+        #
+        # O frontend envia os metadados retornados pelo upload.
+        # ----------------------------------------------------
+
+        media_path = data.get('media_path')
+        media_name = data.get('media_name')
+        media_type = data.get('media_type')
+        media_mimetype = data.get('media_mimetype')
+        media_caption = data.get('media_caption')
+
+        # Normalizar strings vazias para None
+        media_path = (
+            str(media_path).strip()
+            if media_path
+            else None
+        )
+
+        media_name = (
+            str(media_name).strip()
+            if media_name
+            else None
+        )
+
+        media_type = (
+            str(media_type).strip()
+            if media_type
+            else None
+        )
+
+        media_mimetype = (
+            str(media_mimetype).strip()
+            if media_mimetype
+            else None
+        )
+
+        media_caption = (
+            str(media_caption)
+            if media_caption is not None
+            else None
+        )
+
+        # ----------------------------------------------------
+        # VALIDAR MÍDIA, SE INFORMADA
+        # ----------------------------------------------------
+
+        if media_path:
+
+            caminho_midia = Path(media_path).resolve()
+            media_root_resolvido = Path(
+                MEDIA_ROOT
+            ).resolve()
+
+            try:
+                caminho_midia.relative_to(
+                    media_root_resolvido
+                )
+            except ValueError:
+                return jsonify({
+                    'success': False,
+                    'error': 'media_path inválido'
+                }), 400
+
+            if not caminho_midia.is_file():
+                return jsonify({
+                    'success': False,
+                    'error': 'arquivo de mídia não encontrado'
+                }), 400
+
+            if media_type not in ALLOWED_MEDIA:
+                return jsonify({
+                    'success': False,
+                    'error': 'media_type inválido'
+                }), 400
+
+            mimetypes_permitidos = ALLOWED_MEDIA[
+                media_type
+            ]
+
+            if media_mimetype not in mimetypes_permitidos:
+                return jsonify({
+                    'success': False,
+                    'error': 'media_mimetype incompatível com media_type'
+                }), 400
+
+        else:
+            # Se não existe mídia, não gravar metadados incompletos.
+            media_name = None
+            media_type = None
+            media_mimetype = None
+            media_caption = None
+
+        # ----------------------------------------------------
+        # CRIAR CAMPANHA
+        # ----------------------------------------------------
+
+        conn.execute(
+            '''
+            INSERT INTO mensagens_whatsapp (
+                nome_campanha,
+                mensagem,
+                lista_contatos,
+                status,
+                total_contatos,
+                intervalo_segundos,
+                media_path,
+                media_name,
+                media_type,
+                media_mimetype,
+                media_caption
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''',
+            (
+                nome_campanha,
+                mensagem,
+                '',
+                'Rascunho',
+                len(contatos),
+                intervalo_segundos,
+                media_path,
+                media_name,
+                media_type,
+                media_mimetype,
+                media_caption,
+            )
+        )
+
+        campanha_id = conn.execute(
+            'SELECT last_insert_rowid()'
+        ).fetchone()[0]
+
+        # ----------------------------------------------------
+        # CONTATOS DA CAMPANHA
+        # ----------------------------------------------------
+
+        for contato in contatos:
+
+            if not isinstance(contato, dict):
+                continue
+
+            telefone = contato.get('telefone')
+
+            if not telefone:
+                continue
+
+            conn.execute(
+                '''
+                INSERT INTO contatos_whatsapp (
+                    campanha_id,
+                    nome,
+                    telefone
+                )
+                VALUES (?, ?, ?)
+                ''',
+                (
+                    campanha_id,
+                    contato.get('nome', ''),
+                    telefone
+                )
+            )
+
+        conn.commit()
+
+        # ----------------------------------------------------
+        # RETORNO
+        # ----------------------------------------------------
+
+        return jsonify({
+            'success': True,
+            'id': campanha_id,
+            'status': 'Rascunho',
+            'media': {
+                'path': media_path,
+                'name': media_name,
+                'type': media_type,
+                'mimetype': media_mimetype,
+                'caption': media_caption,
+            } if media_path else None
+        })
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
         conn.close()
-        return jsonify([dict(r) for r in rows])
-    data = request.json
-    contatos = data.get('contatos', [])
-    conn.execute('''INSERT INTO mensagens_whatsapp
-        (nome_campanha,mensagem,status,total_contatos,intervalo_segundos)
-        VALUES (?,?,?,?,?)''',
-        (data['nome_campanha'], data['mensagem'], 'Rascunho',
-         len(contatos), data.get('intervalo_segundos', 5)))
-    campanha_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
-    for contato in contatos:
-        conn.execute('''INSERT INTO contatos_whatsapp (campanha_id,nome,telefone)
-            VALUES (?,?,?)''', (campanha_id, contato.get('nome',''), contato['telefone']))
-    conn.commit(); conn.close()
-    return jsonify({'success': True, 'id': campanha_id})
+
 
 @app.route('/api/whatsapp/campanhas/<int:id>/iniciar', methods=['POST'])
 @login_required
