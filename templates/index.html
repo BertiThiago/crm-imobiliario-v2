@@ -1500,6 +1500,15 @@ async function renderWhatsapp() {
     </div>`;
 }
 
+let waMidia = {
+  path: null,
+  name: null,
+  type: null,
+  mimetype: null,
+  caption: null,
+  size: 0
+};
+
 async function modalNovaCampanha() {
   modal('Nova Campanha WhatsApp', `
     <div class="form-group" style="margin-bottom:16px">
@@ -1536,6 +1545,213 @@ async function modalNovaCampanha() {
      <button class="btn btn-primary" onclick="criarCampanha()"><i class="fas fa-save"></i> Salvar Campanha</button>`, 'modal-lg');
 
   window._waContatos = [];
+
+  waMidia = {
+  path: null,
+  name: null,
+  type: null,
+  mimetype: null,
+  caption: null,
+  size: 0
+};
+}
+
+<div style="margin-bottom:16px">
+  <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:8px">
+    Mídia da Campanha
+  </label>
+
+  <input
+    type="file"
+    id="wa-media-file"
+    accept=".jpg,.jpeg,.png,.webp,.mp4,image/jpeg,image/png,image/webp,video/mp4"
+    onchange="selecionarMidiaCampanha(this)"
+    style="width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:9px"
+  >
+
+  <div
+    id="wa-media-info"
+    style="margin-top:8px;font-size:12px;color:var(--text3)"
+  >
+    Nenhuma mídia selecionada.
+  </div>
+
+  <div class="form-group" style="margin-top:10px">
+    <label>Legenda da mídia</label>
+    <textarea
+      id="wa-media-caption"
+      rows="2"
+      placeholder="Legenda opcional da imagem ou vídeo..."
+    ></textarea>
+  </div>
+
+  <div
+    id="wa-media-preview"
+    style="display:none;margin-top:10px"
+  ></div>
+</div>
+
+async function selecionarMidiaCampanha(input) {
+
+  const file = input.files?.[0];
+
+  if (!file) {
+    waMidia = {
+      path: null,
+      name: null,
+      type: null,
+      mimetype: null,
+      caption: null,
+      size: 0
+    };
+
+    document.getElementById('wa-media-info').textContent =
+      'Nenhuma mídia selecionada.';
+
+    document.getElementById('wa-media-preview').style.display = 'none';
+
+    return;
+  }
+
+  const info = document.getElementById('wa-media-info');
+
+  info.innerHTML = `
+    <span style="color:var(--accent)">
+      <i class="fas fa-spinner fa-spin"></i>
+      Enviando mídia...
+    </span>
+  `;
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+
+    const response = await fetch(
+      '/api/whatsapp/media',
+      {
+        method: 'POST',
+        body: formData,
+        credentials: 'include'
+      }
+    );
+
+    const result = await response.json();
+
+    if (!response.ok || !result.success) {
+      throw new Error(
+        result.error || 'Erro ao enviar mídia.'
+      );
+    }
+
+    waMidia = {
+      path: result.media_path,
+      name: result.media_name,
+      type: result.media_type,
+      mimetype: result.media_mimetype,
+      caption: '',
+      size: result.size || file.size
+    };
+
+    info.innerHTML = `
+      <div style="color:var(--green)">
+        <i class="fas fa-check-circle"></i>
+        ${result.media_name}
+      </div>
+      <div style="margin-top:3px">
+        ${result.media_type} · ${formatarTamanhoMidia(result.size || file.size)}
+      </div>
+    `;
+
+    mostrarPreviewMidia(file);
+
+  } catch (error) {
+
+    console.error('Erro ao enviar mídia:', error);
+
+    waMidia = {
+      path: null,
+      name: null,
+      type: null,
+      mimetype: null,
+      caption: null,
+      size: 0
+    };
+
+    input.value = '';
+
+    info.innerHTML = `
+      <span style="color:var(--red)">
+        <i class="fas fa-exclamation-circle"></i>
+        ${error.message}
+      </span>
+    `;
+
+    document.getElementById('wa-media-preview').style.display = 'none';
+
+    alert(`❌ Não foi possível enviar a mídia.\n\n${error.message}`);
+  }
+}
+
+function mostrarPreviewMidia(file) {
+
+  const preview = document.getElementById('wa-media-preview');
+
+  const url = URL.createObjectURL(file);
+
+  if (file.type.startsWith('image/')) {
+
+    preview.innerHTML = `
+      <div style="border:1px solid var(--border);border-radius:10px;padding:8px;background:var(--bg2)">
+        <img
+          src="${url}"
+          alt="Prévia da mídia"
+          style="max-width:100%;max-height:220px;display:block;margin:auto;border-radius:8px"
+        >
+      </div>
+    `;
+
+  } else if (file.type === 'video/mp4') {
+
+    preview.innerHTML = `
+      <div style="border:1px solid var(--border);border-radius:10px;padding:8px;background:var(--bg2)">
+        <video
+          controls
+          style="width:100%;max-height:220px;border-radius:8px"
+        >
+          <source src="${url}" type="${file.type}">
+        </video>
+      </div>
+    `;
+
+  } else {
+
+    preview.innerHTML = `
+      <div style="padding:12px;border:1px solid var(--border);border-radius:8px">
+        <i class="fas fa-file"></i>
+        ${file.name}
+      </div>
+    `;
+  }
+
+  preview.style.display = 'block';
+}
+
+function formatarTamanhoMidia(bytes) {
+
+  if (!bytes) return '0 B';
+
+  const unidades = ['B', 'KB', 'MB', 'GB'];
+
+  const i = Math.floor(
+    Math.log(bytes) / Math.log(1024)
+  );
+
+  return (
+    (bytes / Math.pow(1024, i)).toFixed(1)
+    + ' '
+    + unidades[i]
+  );
 }
 
 function selecionarIntervalo(btn, val) {
@@ -1616,12 +1832,106 @@ async function criarCampanha() {
   const msg = document.getElementById('wa-msg').value.trim();
   if(!nome || !msg) return alert('Nome e mensagem são obrigatórios!');
   if(!window._waContatos?.length) return alert('Adicione ao menos um contato!');
-  const r = await POST('/whatsapp/campanhas', {
+ async function criarCampanha() {
+
+  const nome =
+    document.getElementById('wa-nome').value.trim();
+
+  const msg =
+    document.getElementById('wa-msg').value.trim();
+
+  if (!nome || !msg) {
+    return alert(
+      'Nome e mensagem são obrigatórios!'
+    );
+  }
+
+  if (!window._waContatos?.length) {
+    return alert(
+      'Adicione ao menos um contato!'
+    );
+  }
+
+  const caption =
+    document.getElementById('wa-media-caption')?.value || '';
+
+  if (waMidia.path) {
+    waMidia.caption = caption;
+  }
+
+  const dadosCampanha = {
     nome_campanha: nome,
     mensagem: msg,
     contatos: window._waContatos,
-    intervalo_segundos: parseInt(document.getElementById('wa-intervalo').value)||5
-  });
+    intervalo_segundos:
+      parseInt(
+        document.getElementById('wa-intervalo').value
+      ) || 5,
+
+    media_path: waMidia.path,
+    media_name: waMidia.name,
+    media_type: waMidia.type,
+    media_mimetype: waMidia.mimetype,
+    media_caption: waMidia.caption
+  };
+
+  console.log(
+    '=== DADOS DA CAMPANHA ===',
+    dadosCampanha
+  );
+
+  try {
+
+    const r = await POST(
+      '/whatsapp/campanhas',
+      dadosCampanha
+    );
+
+    if (!r.success) {
+      return alert(
+        `❌ Erro ao criar campanha:\n\n${r.error || 'Erro desconhecido'}`
+      );
+    }cd "F:\Projetos\Projeto crm_imobiliario_v2"
+
+git status
+git diff -- index.html
+
+    closeModal();
+
+    window._waContatos = [];
+
+    waMidia = {
+      path: null,
+      name: null,
+      type: null,
+      mimetype: null,
+      caption: null,
+      size: 0
+    };
+
+    await renderWhatsapp();
+
+    alert(
+      `✅ Campanha criada com sucesso!\n\n` +
+      `ID: ${r.id}\n` +
+      `Status: ${r.status || 'Rascunho'}\n` +
+      `Contatos: ${dadosCampanha.contatos.length}\n` +
+      `Mídia: ${dadosCampanha.media_name || 'Nenhuma'}\n\n` +
+      `A campanha permanece em Rascunho.`
+    );
+
+  } catch (error) {
+
+    console.error(
+      'Erro ao criar campanha:',
+      error
+    );
+
+    alert(
+      `❌ Erro ao criar campanha:\n\n${error.message}`
+    );
+  }
+}
   if(r.success) {
     closeModal();
     renderWhatsapp();
