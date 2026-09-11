@@ -1223,51 +1223,148 @@ def campanhas_whatsapp():
             else None
         )
 
-        # ----------------------------------------------------
+       # ----------------------------------------------------
         # VALIDAR MÍDIA, SE INFORMADA
         # ----------------------------------------------------
 
         if media_path:
 
-            caminho_midia = Path(media_path).resolve()
             media_root_resolvido = Path(
                 MEDIA_ROOT
             ).resolve()
 
+            caminho_recebido = Path(
+                str(media_path).strip()
+            )
+
+            # ------------------------------------------------
+            # RESOLVER O CAMINHO DA MÍDIA
+            # ------------------------------------------------
+            #
+            # O frontend pode enviar:
+            #
+            # 1. caminho absoluto:
+            #    /content/drive/MyDrive/...
+            #
+            # 2. caminho relativo:
+            #    arquivo.jpg
+            #
+            # 3. caminho relativo contendo estrutura:
+            #    database/campanhas/midias/arquivo.jpg
+            #
+            # Em todos os casos, o arquivo precisa estar
+            # fisicamente dentro de MEDIA_ROOT.
+            # ------------------------------------------------
+
+            if caminho_recebido.is_absolute():
+
+                caminho_midia = (
+                    caminho_recebido.resolve()
+                )
+
+            else:
+
+                # Primeiro tenta diretamente dentro
+                # de MEDIA_ROOT.
+                caminho_midia = (
+                    media_root_resolvido /
+                    caminho_recebido
+                ).resolve()
+
+                # Caso tenha vindo algo como:
+                #
+                # database/campanhas/midias/arquivo.jpg
+                #
+                # tenta localizar apenas pelo nome.
+                if not caminho_midia.is_file():
+
+                    caminho_por_nome = (
+                        media_root_resolvido /
+                        caminho_recebido.name
+                    ).resolve()
+
+                    if caminho_por_nome.is_file():
+
+                        caminho_midia = (
+                            caminho_por_nome
+                        )
+
+            # ------------------------------------------------
+            # SEGURANÇA
+            # Garantir que o arquivo está dentro de MEDIA_ROOT.
+            # ------------------------------------------------
+
             try:
+
                 caminho_midia.relative_to(
                     media_root_resolvido
                 )
+
             except ValueError:
+
                 return jsonify({
                     'success': False,
                     'error': 'media_path inválido'
                 }), 400
 
+            # ------------------------------------------------
+            # GARANTIR QUE O ARQUIVO EXISTE
+            # ------------------------------------------------
+
             if not caminho_midia.is_file():
+
                 return jsonify({
                     'success': False,
                     'error': 'arquivo de mídia não encontrado'
                 }), 400
 
+            # ------------------------------------------------
+            # NORMALIZAR O CAMINHO
+            #
+            # O banco grava somente o caminho relativo
+            # à pasta MEDIA_ROOT.
+            # ------------------------------------------------
+
+            media_path = str(
+                caminho_midia.relative_to(
+                    media_root_resolvido
+                )
+            )
+
+            # ------------------------------------------------
+            # VALIDAR TIPO DA MÍDIA
+            # ------------------------------------------------
+
             if media_type not in ALLOWED_MEDIA:
+
                 return jsonify({
                     'success': False,
                     'error': 'media_type inválido'
                 }), 400
 
-            mimetypes_permitidos = ALLOWED_MEDIA[
-                media_type
-            ]
+            mimetypes_permitidos = (
+                ALLOWED_MEDIA[media_type]
+            )
 
             if media_mimetype not in mimetypes_permitidos:
+
                 return jsonify({
                     'success': False,
-                    'error': 'media_mimetype incompatível com media_type'
+                    'error': (
+                        'media_mimetype incompatível '
+                        'com media_type'
+                    )
                 }), 400
 
         else:
-            # Se não existe mídia, não gravar metadados incompletos.
+
+            # ------------------------------------------------
+            # SEM MÍDIA
+            #
+            # Somente aqui devemos limpar os metadados.
+            # ------------------------------------------------
+
+            media_path = None
             media_name = None
             media_type = None
             media_mimetype = None
