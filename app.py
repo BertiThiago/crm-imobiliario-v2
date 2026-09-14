@@ -810,7 +810,10 @@ def atualizar_whatsapp_optin(id):
             upsert_contact(
                 phone=telefone,
                 name=lead["nome"] or "",
-                opt_in=opt_in
+                opt_in=opt_in,
+                opt_in_source=source if opt_in else "",
+                opt_in_at=now_value,
+                opt_out=not opt_in
             )
 
         except Exception as exc:
