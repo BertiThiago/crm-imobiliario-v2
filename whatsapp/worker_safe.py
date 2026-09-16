@@ -1,13 +1,14 @@
-"""Worker da fila segura integrada ao CRM.
+"""Worker da Safe Queue.
 
-DRY-RUN é o padrão.
-No envio real, a Evolution retorna inicialmente PENDING.
-O status posterior é atualizado pelo webhook MESSAGES_UPDATE.
+Produção:
+- somente envio real
+- texto via Evolution sendText
+- imagem/vídeo via Evolution sendMedia
 """
 
 import os
-import random
 import time
+import random
 
 try:
     from .safe_queue import (
@@ -17,9 +18,14 @@ try:
         MIN_DELAY_SECONDS,
         MAX_DELAY_SECONDS,
     )
-    from .evolution_sender import send_text
+
+    from .evolution_sender import (
+        send_text,
+        send_media,
+    )
 
 except ImportError:
+
     from safe_queue import (
         claim_next,
         mark_pending,
@@ -27,13 +33,15 @@ except ImportError:
         MIN_DELAY_SECONDS,
         MAX_DELAY_SECONDS,
     )
-    from evolution_sender import send_text
 
-
-DRY_RUN = os.getenv("SAFE_DRY_RUN", "1") != "0"
+    from evolution_sender import (
+        send_text,
+        send_media,
+    )
 
 
 def process_once():
+
     item = claim_next()
 
     if not item:
@@ -45,58 +53,97 @@ def process_once():
 
     try:
 
-        if DRY_RUN:
+        media_path = item.get(
+            "media_path"
+        )
+
+        media_type = item.get(
+            "media_type"
+        )
+
+        media_mimetype = item.get(
+            "media_mimetype"
+        )
+
+        media_name = item.get(
+            "media_name"
+        )
+
+        media_caption = item.get(
+            "media_caption"
+        )
+
+        # -------------------------------------------------
+        # MÍDIA
+        # -------------------------------------------------
+
+        if media_path:
 
             print(
-                f"[DRY-RUN] {phone}: "
+                f"[MEDIA] {phone} | "
+                f"{media_type} | "
+                f"{media_name or media_path}"
+            )
+
+            response = send_media(
+                phone=phone,
+                media_path=media_path,
+                media_type=media_type,
+                media_mimetype=media_mimetype,
+                media_name=media_name,
+                caption=(
+                    media_caption
+                    if media_caption is not None
+                    else message
+                ),
+            )
+
+        # -------------------------------------------------
+        # TEXTO
+        # -------------------------------------------------
+
+        else:
+
+            print(
+                f"[TEXT] {phone}: "
                 f"{message[:100]}"
             )
 
-            # DRY-RUN continua sem chamar a Evolution.
-            # Para manter o comportamento de teste,
-            # marcamos como processado localmente.
-            #
-            # Não existe messageId da Evolution neste modo.
-            mark_pending(
-                queue_id,
-                None
+            response = send_text(
+                phone,
+                message
             )
 
-            print(
-                f"[DRY-RUN SENT] {phone} | "
-                f"fila={queue_id}"
-            )
-
-            return True
-
         # -------------------------------------------------
-        # ENVIO REAL
+        # MESSAGE ID
         # -------------------------------------------------
-
-        response = send_text(
-            phone,
-            message
-        )
 
         evolution_message_id = None
 
         if isinstance(response, dict):
 
-            evolution_message_id = (
-                response
-                .get("key", {})
-                .get("id")
+            key = response.get(
+                "key",
+                {}
             )
 
+            if isinstance(key, dict):
+
+                evolution_message_id = (
+                    key.get("id")
+                )
+
         if not evolution_message_id:
+
             raise RuntimeError(
                 "Evolution aceitou o envio, "
                 "mas não retornou o messageId."
             )
 
-        # A Evolution respondeu PENDING.
-        # O status real será atualizado por
-        # MESSAGES_UPDATE.
+        # -------------------------------------------------
+        # PENDING
+        # -------------------------------------------------
+
         mark_pending(
             queue_id,
             evolution_message_id
@@ -119,6 +166,7 @@ def process_once():
 
         print(
             f"[FAILED] {phone} | "
+            f"fila={queue_id} | "
             f"{exc}"
         )
 
@@ -128,17 +176,17 @@ def process_once():
 def run():
 
     print("=" * 60)
-    print("SAFE QUEUE WORKER")
+    print("SAFE QUEUE WORKER — PRODUÇÃO")
     print("=" * 60)
-
-    print(
-        f"DRY_RUN = {DRY_RUN}"
-    )
 
     print(
         f"Intervalo = "
         f"{MIN_DELAY_SECONDS}s até "
         f"{MAX_DELAY_SECONDS}s"
+    )
+
+    print(
+        "DRY_RUN removido."
     )
 
     print("=" * 60)
@@ -148,7 +196,9 @@ def run():
         processed = process_once()
 
         if not processed:
+
             time.sleep(2)
+
             continue
 
         time.sleep(
@@ -160,4 +210,5 @@ def run():
 
 
 if __name__ == "__main__":
+
     run()

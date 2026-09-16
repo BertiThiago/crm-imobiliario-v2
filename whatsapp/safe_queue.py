@@ -82,6 +82,9 @@ def init_db():
                 phone TEXT PRIMARY KEY,
                 name TEXT DEFAULT '',
                 opt_in INTEGER NOT NULL DEFAULT 0,
+                opt_in_source TEXT NOT NULL DEFAULT '',
+                opt_in_at TEXT,
+                opt_out INTEGER NOT NULL DEFAULT 0,
                 conversation_active INTEGER NOT NULL DEFAULT 0,
                 last_incoming_at TEXT,
                 last_outgoing_at TEXT,
@@ -177,15 +180,32 @@ def event(c, phone, typ, detail=""):
 def upsert_contact(
     phone,
     name="",
-    opt_in=False
+    opt_in=False,
+    opt_in_source="",
+    opt_in_at=None,
+    opt_out=None
 ):
+    """
+    Cria ou atualiza um contato.
+
+    Permite registrar opt-in manual, por exemplo quando o
+    consentimento foi obtido por ligação, presencialmente ou
+    por outro canal externo ao WhatsApp.
+
+    Retorna o contato atualizado.
+    """
 
     phone = str(phone).strip()
+    name = str(name or "").strip()
+    opt_in_source = str(opt_in_source or "").strip()
 
     if not phone:
         raise ValueError(
             "phone obrigatório"
         )
+
+    if opt_in_at is None and bool(opt_in):
+        opt_in_at = iso(now())
 
     with _lock:
 
@@ -198,87 +218,98 @@ def upsert_contact(
                 phone,
                 name,
                 opt_in,
+                opt_in_source,
+                opt_in_at,
+                opt_out,
                 updated_at
             )
-            VALUES(?,?,?,?)
+            VALUES(?,?,?,?,?,?,?)
 
             ON CONFLICT(phone)
             DO UPDATE SET
-                name=excluded.name,
-                opt_in=excluded.opt_in,
-                updated_at=excluded.updated_at
-            """,
-            (
-                phone,
-                name,
-                int(opt_in),
-                t
-            )
-        )
 
-        c.commit()
-        c.close()
-
-
-def register_incoming(
-    phone,
-    name="",
-    text=""
-):
-
-    phone = str(phone).strip()
-    t = iso(now())
-
-    if not phone:
-        raise ValueError(
-            "phone obrigatório"
-        )
-
-    with _lock:
-
-        c = connect()
-
-        c.execute(
-            """
-            INSERT INTO contacts(
-                phone,
-                name,
-                conversation_active,
-                last_incoming_at,
-                total_incoming,
-                updated_at
-            )
-            VALUES(?,?,1,?,1,?)
-
-            ON CONFLICT(phone)
-            DO UPDATE SET
                 name=CASE
                     WHEN excluded.name <> ''
                     THEN excluded.name
                     ELSE contacts.name
                 END,
-                conversation_active=1,
-                last_incoming_at=excluded.last_incoming_at,
-                total_incoming=contacts.total_incoming+1,
+
+                opt_in=excluded.opt_in,
+
+                opt_in_source=CASE
+                    WHEN excluded.opt_in_source <> ''
+                    THEN excluded.opt_in_source
+                    ELSE contacts.opt_in_source
+                END,
+
+                opt_in_at=CASE
+                    WHEN excluded.opt_in = 1
+                    THEN COALESCE(
+                        excluded.opt_in_at,
+                        contacts.opt_in_at,
+                        excluded.updated_at
+                    )
+                    ELSE contacts.opt_in_at
+                END,
+
+                opt_out=CASE
+                    WHEN ? IS NOT NULL
+                    THEN ?
+                    ELSE contacts.opt_out
+                END,
+
                 updated_at=excluded.updated_at
             """,
             (
                 phone,
                 name,
+                int(bool(opt_in)),
+                opt_in_source,
+                opt_in_at,
+                0 if opt_out is None else int(bool(opt_out)),
                 t,
-                t
+
+                # parâmetros do CASE do opt_out
+                opt_out,
+                0 if opt_out is None else int(bool(opt_out))
             )
         )
 
-        event(
-            c,
-            phone,
-            "incoming",
-            text[:500]
-        )
+        if bool(opt_in):
+            event(
+                c,
+                phone,
+                "opt_in",
+                (
+                    f"Opt-in registrado. "
+                    f"Origem: {opt_in_source or 'não informada'}"
+                )
+            )
+
+        if opt_out is True:
+            event(
+                c,
+                phone,
+                "opt_out",
+                "Opt-out registrado manualmente"
+            )
 
         c.commit()
+
+        row = c.execute(
+            """
+            SELECT *
+            FROM contacts
+            WHERE phone=?
+            """,
+            (phone,)
+        ).fetchone()
+
+        result = dict(row) if row else None
+
         c.close()
+
+        return result
 
 
 def expire_inactive():
