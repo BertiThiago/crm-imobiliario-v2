@@ -1,34 +1,20 @@
-from __future__ import annotations
-
-import os
 import sqlite3
 import threading
 import uuid
-
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-DB_PATH = os.getenv(
-    "SAFE_QUEUE_DB",
-    str(BASE_DIR / "data" / "safe_queue.db")
-)
-
-ACTIVE_WINDOW_HOURS = int(
-    os.getenv("SAFE_ACTIVE_WINDOW_HOURS", "24")
-)
-
-MIN_DELAY_SECONDS = float(
-    os.getenv("SAFE_MIN_DELAY_SECONDS", "8")
-)
-
-MAX_DELAY_SECONDS = float(
-    os.getenv("SAFE_MAX_DELAY_SECONDS", "20")
-)
+BASE_DIR = Path(__file__).resolve().parents[1]
+DB_PATH = BASE_DIR / "database" / "crm.db"
 
 _lock = threading.RLock()
+
+
+def connect():
+    c = sqlite3.connect(str(DB_PATH), timeout=30)
+    c.row_factory = sqlite3.Row
+    return c
 
 
 def now():
@@ -36,63 +22,46 @@ def now():
 
 
 def iso(dt):
-    return dt.astimezone(timezone.utc).isoformat()
-
-
-def connect():
-    Path(DB_PATH).parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    c = sqlite3.connect(
-        DB_PATH,
-        check_same_thread=False
-    )
-
-    c.row_factory = sqlite3.Row
-
-    return c
+    return dt.isoformat()
 
 
 def _ensure_column(c, table, column, definition):
     columns = {
         row["name"]
-        for row in c.execute(
-            f"PRAGMA table_info({table})"
-        ).fetchall()
+        for row in c.execute(f"PRAGMA table_info({table})").fetchall()
     }
 
     if column not in columns:
         c.execute(
-            f"ALTER TABLE {table} "
-            f"ADD COLUMN {column} {definition}"
+            f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
         )
 
 
 def init_db():
-
     with _lock:
-
         c = connect()
 
-        c.executescript(
+        c.execute(
             """
             CREATE TABLE IF NOT EXISTS contacts(
                 phone TEXT PRIMARY KEY,
                 name TEXT DEFAULT '',
                 opt_in INTEGER NOT NULL DEFAULT 0,
-                opt_in_source TEXT NOT NULL DEFAULT '',
-                opt_in_at TEXT,
-                opt_out INTEGER NOT NULL DEFAULT 0,
                 conversation_active INTEGER NOT NULL DEFAULT 0,
                 last_incoming_at TEXT,
                 last_outgoing_at TEXT,
                 total_incoming INTEGER NOT NULL DEFAULT 0,
                 total_outgoing INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT NOT NULL
-            );
+                updated_at TEXT NOT NULL,
+                opt_in_source TEXT NOT NULL DEFAULT '',
+                opt_in_at TEXT,
+                opt_out INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
 
+        c.execute(
+            """
             CREATE TABLE IF NOT EXISTS queue(
                 id TEXT PRIMARY KEY,
                 phone TEXT NOT NULL,
@@ -102,79 +71,133 @@ def init_db():
                 created_at TEXT NOT NULL,
                 started_at TEXT,
                 sent_at TEXT,
-                error TEXT DEFAULT ''
-            );
-
-            CREATE TABLE IF NOT EXISTS events(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                phone TEXT,
-                event_type TEXT NOT NULL,
-                detail TEXT DEFAULT '',
-                created_at TEXT NOT NULL
-            );
+                error TEXT DEFAULT '',
+                evolution_message_id TEXT,
+                delivery_status TEXT,
+                delivered_at TEXT,
+                read_at TEXT,
+                send_mode TEXT NOT NULL DEFAULT 'service',
+                media_path TEXT,
+                media_name TEXT,
+                media_type TEXT,
+                media_mimetype TEXT,
+                media_caption TEXT
+            )
             """
-        )
-
-        # Campos novos para acompanhar a Evolution.
-        _ensure_column(
-            c,
-            "queue",
-            "evolution_message_id",
-            "TEXT"
-        )
-
-        _ensure_column(
-            c,
-            "queue",
-            "delivery_status",
-            "TEXT"
-        )
-
-        _ensure_column(
-            c,
-            "queue",
-            "delivered_at",
-            "TEXT"
-        )
-
-        _ensure_column(
-            c,
-            "queue",
-            "read_at",
-            "TEXT"
         )
 
         c.execute(
             """
-            CREATE INDEX IF NOT EXISTS
-            idx_queue_evolution_message_id
-            ON queue(evolution_message_id)
+            CREATE TABLE IF NOT EXISTS events(
+                id TEXT PRIMARY KEY,
+                phone TEXT NOT NULL,
+                type TEXT NOT NULL,
+                detail TEXT DEFAULT '',
+                created_at TEXT NOT NULL
+            )
             """
         )
+
+        # Existing databases may predate some of these columns.
+        _ensure_column(c, "contacts", "opt_in_source", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(c, "contacts", "opt_in_at", "TEXT")
+        _ensure_column(c, "contacts", "opt_out", "INTEGER NOT NULL DEFAULT 0")
+
+        _ensure_column(c, "queue", "evolution_message_id", "TEXT")
+        _ensure_column(c, "queue", "delivery_status", "TEXT")
+        _ensure_column(c, "queue", "delivered_at", "TEXT")
+        _ensure_column(c, "queue", "read_at", "TEXT")
+        _ensure_column(c, "queue", "send_mode", "TEXT NOT NULL DEFAULT 'service'")
+        _ensure_column(c, "queue", "media_path", "TEXT")
+        _ensure_column(c, "queue", "media_name", "TEXT")
+        _ensure_column(c, "queue", "media_type", "TEXT")
+        _ensure_column(c, "queue", "media_mimetype", "TEXT")
+        _ensure_column(c, "queue", "media_caption", "TEXT")
 
         c.commit()
         c.close()
 
 
 def event(c, phone, typ, detail=""):
-
     c.execute(
         """
         INSERT INTO events(
+            id,
             phone,
-            event_type,
+            type,
             detail,
             created_at
         )
-        VALUES(?,?,?,?)
+        VALUES(?,?,?,?,?)
         """,
         (
-            phone,
-            typ,
-            detail,
-            iso(now())
-        )
+            str(uuid.uuid4()),
+            str(phone),
+            str(typ),
+            str(detail or ""),
+            iso(now()),
+        ),
     )
+
+
+def expire_inactive():
+    """
+    Encerra automaticamente conversas de serviço que ultrapassaram
+    a janela de 24 horas desde a última mensagem recebida.
+    """
+    with _lock:
+        c = connect()
+
+        cutoff = now() - timedelta(hours=24)
+
+        rows = c.execute(
+            """
+            SELECT phone, last_incoming_at
+            FROM contacts
+            WHERE conversation_active=1
+              AND last_incoming_at IS NOT NULL
+            """
+        ).fetchall()
+
+        for row in rows:
+            try:
+                last_incoming = datetime.fromisoformat(
+                    row["last_incoming_at"]
+                )
+
+                if last_incoming.tzinfo is None:
+                    last_incoming = last_incoming.replace(
+                        tzinfo=timezone.utc
+                    )
+
+                if last_incoming < cutoff:
+                    c.execute(
+                        """
+                        UPDATE contacts
+                        SET
+                            conversation_active=0,
+                            updated_at=?
+                        WHERE phone=?
+                        """,
+                        (
+                            iso(now()),
+                            row["phone"],
+                        ),
+                    )
+
+                    event(
+                        c,
+                        row["phone"],
+                        "conversation_expired",
+                        "Janela de 24h expirada",
+                    )
+
+            except Exception:
+                # Uma data inválida não deve derrubar o worker inteiro.
+                continue
+
+        c.commit()
+        c.close()
 
 
 def upsert_contact(
@@ -183,7 +206,7 @@ def upsert_contact(
     opt_in=False,
     opt_in_source="",
     opt_in_at=None,
-    opt_out=None
+    opt_out=None,
 ):
     """
     Cria ou atualiza um contato.
@@ -200,15 +223,12 @@ def upsert_contact(
     opt_in_source = str(opt_in_source or "").strip()
 
     if not phone:
-        raise ValueError(
-            "phone obrigatório"
-        )
+        raise ValueError("phone obrigatório")
 
     if opt_in_at is None and bool(opt_in):
         opt_in_at = iso(now())
 
     with _lock:
-
         c = connect()
         t = iso(now())
 
@@ -268,11 +288,9 @@ def upsert_contact(
                 opt_in_at,
                 0 if opt_out is None else int(bool(opt_out)),
                 t,
-
-                # parâmetros do CASE do opt_out
                 opt_out,
-                0 if opt_out is None else int(bool(opt_out))
-            )
+                0 if opt_out is None else int(bool(opt_out)),
+            ),
         )
 
         if bool(opt_in):
@@ -283,7 +301,7 @@ def upsert_contact(
                 (
                     f"Opt-in registrado. "
                     f"Origem: {opt_in_source or 'não informada'}"
-                )
+                ),
             )
 
         if opt_out is True:
@@ -291,7 +309,7 @@ def upsert_contact(
                 c,
                 phone,
                 "opt_out",
-                "Opt-out registrado manualmente"
+                "Opt-out registrado manualmente",
             )
 
         c.commit()
@@ -302,7 +320,7 @@ def upsert_contact(
             FROM contacts
             WHERE phone=?
             """,
-            (phone,)
+            (phone,),
         ).fetchone()
 
         result = dict(row) if row else None
@@ -312,59 +330,63 @@ def upsert_contact(
         return result
 
 
-def expire_inactive():
+def register_incoming(phone, name="", detail=""):
+    """
+    Registra uma mensagem recebida e abre/renova a conversa de serviço.
+    """
 
-    cutoff = now() - timedelta(
-        hours=ACTIVE_WINDOW_HOURS
-    )
+    phone = str(phone).strip()
+
+    if not phone:
+        raise ValueError("phone obrigatório")
+
+    t = iso(now())
 
     with _lock:
-
         c = connect()
 
-        rows = c.execute(
+        c.execute(
             """
-            SELECT
+            INSERT INTO contacts(
                 phone,
-                last_incoming_at
-            FROM contacts
-            WHERE conversation_active=1
-              AND last_incoming_at IS NOT NULL
-            """
-        ).fetchall()
+                name,
+                conversation_active,
+                last_incoming_at,
+                total_incoming,
+                updated_at
+            )
+            VALUES(?,?,?,?,?,?)
 
-        for r in rows:
+            ON CONFLICT(phone)
+            DO UPDATE SET
 
-            try:
+                name=CASE
+                    WHEN excluded.name <> ''
+                    THEN excluded.name
+                    ELSE contacts.name
+                END,
 
-                if datetime.fromisoformat(
-                    r["last_incoming_at"]
-                ) < cutoff:
+                conversation_active=1,
+                last_incoming_at=excluded.last_incoming_at,
+                total_incoming=contacts.total_incoming + 1,
+                updated_at=excluded.updated_at
+            """,
+            (
+                phone,
+                str(name or ""),
+                1,
+                t,
+                1,
+                t,
+            ),
+        )
 
-                    c.execute(
-                        """
-                        UPDATE contacts
-                        SET
-                            conversation_active=0,
-                            updated_at=?
-                        WHERE phone=?
-                        """,
-                        (
-                            iso(now()),
-                            r["phone"]
-                        )
-                    )
-
-                    event(
-                        c,
-                        r["phone"],
-                        "conversation_expired",
-                        f"Janela de "
-                        f"{ACTIVE_WINDOW_HOURS}h expirada"
-                    )
-
-            except Exception:
-                pass
+        event(
+            c,
+            phone,
+            "incoming",
+            detail or "Mensagem recebida",
+        )
 
         c.commit()
         c.close()
@@ -373,16 +395,47 @@ def expire_inactive():
 def enqueue(
     phone,
     message,
-    require_active=True
+    require_active=True,
+    send_mode="service",
+    media_path=None,
+    media_name=None,
+    media_type=None,
+    media_mimetype=None,
+    media_caption=None,
 ):
+    """
+    Coloca uma mensagem na fila somente se as regras de segurança
+    forem atendidas.
+
+    service:
+        exige opt-in, não estar em opt-out e conversa ativa quando
+        require_active=True.
+
+    campaign:
+        exige opt-in e não estar em opt-out, mas não exige
+        conversation_active.
+    """
 
     phone = str(phone).strip()
-    message = str(message).strip()
+    message = str(message or "").strip()
+    send_mode = str(send_mode or "").strip().lower()
+
+    if send_mode not in ("service", "campaign"):
+        raise ValueError(
+            "send_mode deve ser 'service' ou 'campaign'"
+        )
+
+    if not phone:
+        raise ValueError("Telefone não informado.")
+
+    if not message and not media_path:
+        raise ValueError(
+            "Mensagem vazia e nenhuma mídia informada."
+        )
 
     expire_inactive()
 
     with _lock:
-
         c = connect()
 
         r = c.execute(
@@ -391,25 +444,23 @@ def enqueue(
             FROM contacts
             WHERE phone=?
             """,
-            (phone,)
+            (phone,),
         ).fetchone()
 
         if not r:
-
             c.close()
 
             return {
                 "accepted": False,
-                "reason": "contato_nao_cadastrado"
+                "reason": "contato_nao_cadastrado",
             }
 
         if not r["opt_in"]:
-
             event(
                 c,
                 phone,
                 "blocked",
-                "Sem opt-in explícito"
+                "Sem opt-in explícito",
             )
 
             c.commit()
@@ -417,19 +468,35 @@ def enqueue(
 
             return {
                 "accepted": False,
-                "reason": "sem_opt_in"
+                "reason": "sem_opt_in",
+            }
+
+        if r["opt_out"]:
+            event(
+                c,
+                phone,
+                "blocked",
+                "Opt-out explícito",
+            )
+
+            c.commit()
+            c.close()
+
+            return {
+                "accepted": False,
+                "reason": "opt_out",
             }
 
         if (
-            require_active
+            send_mode == "service"
+            and require_active
             and not r["conversation_active"]
         ):
-
             event(
                 c,
                 phone,
                 "blocked",
-                "Conversa inativa"
+                "Conversa inativa",
             )
 
             c.commit()
@@ -437,7 +504,7 @@ def enqueue(
 
             return {
                 "accepted": False,
-                "reason": "conversa_inativa"
+                "reason": "conversa_inativa",
             }
 
         q = str(uuid.uuid4())
@@ -449,24 +516,38 @@ def enqueue(
                 phone,
                 message,
                 status,
+                reason,
+                send_mode,
+                media_path,
+                media_name,
+                media_type,
+                media_mimetype,
+                media_caption,
                 created_at
             )
-            VALUES(?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 q,
                 phone,
                 message,
                 "pending",
-                iso(now())
-            )
+                "",
+                send_mode,
+                media_path,
+                media_name,
+                media_type,
+                media_mimetype,
+                media_caption,
+                iso(now()),
+            ),
         )
 
         event(
             c,
             phone,
             "queued",
-            q
+            q,
         )
 
         c.commit()
@@ -474,16 +555,25 @@ def enqueue(
 
         return {
             "accepted": True,
-            "queue_id": q
+            "queue_id": q,
+            "send_mode": send_mode,
         }
 
 
 def claim_next():
+    """
+    Retira da fila o próximo item elegível.
+
+    Regras:
+      - opt_in obrigatoriamente 1
+      - opt_out obrigatoriamente 0
+      - service exige conversation_active=1
+      - campaign não exige conversation_active
+    """
 
     expire_inactive()
 
     with _lock:
-
         c = connect()
 
         r = c.execute(
@@ -491,6 +581,7 @@ def claim_next():
             SELECT
                 q.*,
                 c.opt_in,
+                c.opt_out,
                 c.conversation_active
             FROM queue q
             JOIN contacts c
@@ -502,15 +593,10 @@ def claim_next():
         ).fetchone()
 
         if not r:
-
             c.close()
             return None
 
-        if (
-            not r["opt_in"]
-            or not r["conversation_active"]
-        ):
-
+        if not r["opt_in"]:
             c.execute(
                 """
                 UPDATE queue
@@ -521,16 +607,75 @@ def claim_next():
                 """,
                 (
                     "blocked",
-                    "Regras de segurança não atendidas",
-                    r["id"]
-                )
+                    "Sem opt-in explícito",
+                    r["id"],
+                ),
             )
 
             event(
                 c,
                 r["phone"],
                 "blocked",
-                "Fila bloqueada"
+                "Fila bloqueada: sem opt-in",
+            )
+
+            c.commit()
+            c.close()
+
+            return None
+
+        if r["opt_out"]:
+            c.execute(
+                """
+                UPDATE queue
+                SET
+                    status=?,
+                    reason=?
+                WHERE id=?
+                """,
+                (
+                    "blocked",
+                    "Opt-out explícito",
+                    r["id"],
+                ),
+            )
+
+            event(
+                c,
+                r["phone"],
+                "blocked",
+                "Fila bloqueada: opt-out",
+            )
+
+            c.commit()
+            c.close()
+
+            return None
+
+        if (
+            r["send_mode"] == "service"
+            and not r["conversation_active"]
+        ):
+            c.execute(
+                """
+                UPDATE queue
+                SET
+                    status=?,
+                    reason=?
+                WHERE id=?
+                """,
+                (
+                    "blocked",
+                    "Conversa inativa",
+                    r["id"],
+                ),
+            )
+
+            event(
+                c,
+                r["phone"],
+                "blocked",
+                "Fila bloqueada: conversa inativa",
             )
 
             c.commit()
@@ -549,8 +694,8 @@ def claim_next():
             (
                 "processing",
                 iso(now()),
-                r["id"]
-            )
+                r["id"],
+            ),
         )
 
         c.commit()
@@ -559,88 +704,77 @@ def claim_next():
         return dict(r)
 
 
-def mark_pending(
-    qid,
-    evolution_message_id
-):
-
+def mark_pending(queue_id, evolution_message_id):
     with _lock:
-
         c = connect()
-
-        r = c.execute(
-            """
-            SELECT phone
-            FROM queue
-            WHERE id=?
-            """,
-            (qid,)
-        ).fetchone()
-
-        t = iso(now())
 
         c.execute(
             """
             UPDATE queue
             SET
-                status='sent',
-                sent_at=?,
+                status=?,
                 evolution_message_id=?,
-                delivery_status='PENDING'
+                sent_at=?,
+                delivery_status=?
             WHERE id=?
             """,
             (
-                t,
+                "sent",
                 evolution_message_id,
-                qid
-            )
+                iso(now()),
+                "PENDING",
+                queue_id,
+            ),
         )
 
-        if r:
+        row = c.execute(
+            """
+            SELECT phone
+            FROM queue
+            WHERE id=?
+            """,
+            (queue_id,),
+        ).fetchone()
 
+        if row:
             c.execute(
                 """
                 UPDATE contacts
                 SET
                     last_outgoing_at=?,
-                    total_outgoing=total_outgoing+1,
+                    total_outgoing=total_outgoing + 1,
                     updated_at=?
                 WHERE phone=?
                 """,
                 (
-                    t,
-                    t,
-                    r["phone"]
-                )
+                    iso(now()),
+                    iso(now()),
+                    row["phone"],
+                ),
             )
 
             event(
                 c,
-                r["phone"],
-                "outgoing_pending",
-                evolution_message_id or qid
+                row["phone"],
+                "sent",
+                evolution_message_id or "",
             )
 
         c.commit()
         c.close()
 
 
-def mark_failed(
-    qid,
-    error
-):
-
+def mark_failed(queue_id, error):
     with _lock:
-
         c = connect()
 
-        r = c.execute(
+        row = c.execute(
             """
             SELECT phone
             FROM queue
             WHERE id=?
             """,
-            (qid,)
+            (queue_id,),
         ).fetchone()
 
         c.execute(
@@ -653,88 +787,64 @@ def mark_failed(
             """,
             (
                 "failed",
-                str(error)[:1000],
-                qid
-            )
+                str(error or ""),
+                queue_id,
+            ),
         )
 
-        if r:
-
+        if row:
             event(
                 c,
-                r["phone"],
+                row["phone"],
                 "failed",
-                str(error)[:500]
+                str(error or ""),
             )
 
         c.commit()
         c.close()
 
 
-def update_message_status(
-    evolution_message_id,
-    status
-):
+def update_message_status(evolution_message_id, status):
+    """
+    Atualiza o status de entrega/leitura recebido da Evolution API.
+    """
 
     evolution_message_id = str(
         evolution_message_id or ""
     ).strip()
 
-    status = str(
-        status or ""
-    ).strip().upper()
+    status = str(status or "").strip().upper()
 
-    if not evolution_message_id or not status:
+    if not evolution_message_id:
         return False
 
-    status_map = {
-        "SERVER_ACK": "sent",
-        "DELIVERY_ACK": "delivered",
-        "READ": "read",
-        "PLAYED": "read",
-        "PENDING": "sent",
-    }
-
-    queue_status = status_map.get(
-        status,
-        "sent"
-    )
+    if not status:
+        return False
 
     with _lock:
-
         c = connect()
 
         row = c.execute(
             """
-            SELECT
-                id,
-                phone
+            SELECT id, phone
             FROM queue
             WHERE evolution_message_id=?
-            ORDER BY created_at DESC
             LIMIT 1
             """,
-            (evolution_message_id,)
+            (evolution_message_id,),
         ).fetchone()
 
         if not row:
-
             c.close()
             return False
 
-        values = [
-            queue_status,
-            status,
-            evolution_message_id
-        ]
+        t = iso(now())
 
-        if status == "DELIVERY_ACK":
-
+        if status in ("DELIVERY_ACK", "DELIVERED"):
             c.execute(
                 """
                 UPDATE queue
                 SET
-                    status=?,
                     delivery_status=?,
                     delivered_at=COALESCE(
                         delivered_at,
@@ -743,23 +853,17 @@ def update_message_status(
                 WHERE evolution_message_id=?
                 """,
                 (
-                    queue_status,
                     status,
-                    iso(now()),
-                    evolution_message_id
-                )
+                    t,
+                    evolution_message_id,
+                ),
             )
 
-        elif status in {
-            "READ",
-            "PLAYED"
-        }:
-
+        elif status in ("READ", "PLAYED"):
             c.execute(
                 """
                 UPDATE queue
                 SET
-                    status=?,
                     delivery_status=?,
                     read_at=COALESCE(
                         read_at,
@@ -768,35 +872,31 @@ def update_message_status(
                 WHERE evolution_message_id=?
                 """,
                 (
-                    queue_status,
                     status,
-                    iso(now()),
-                    evolution_message_id
-                )
+                    t,
+                    evolution_message_id,
+                ),
             )
 
         else:
-
             c.execute(
                 """
                 UPDATE queue
                 SET
-                    status=?,
                     delivery_status=?
                 WHERE evolution_message_id=?
                 """,
                 (
-                    queue_status,
                     status,
-                    evolution_message_id
-                )
+                    evolution_message_id,
+                ),
             )
 
         event(
             c,
             row["phone"],
-            "message_update",
-            f"{status} | {evolution_message_id}"
+            "message_status",
+            f"{evolution_message_id}: {status}",
         )
 
         c.commit()
@@ -805,164 +905,82 @@ def update_message_status(
         return True
 
 
-def dashboard():
-
-    expire_inactive()
-
-    with _lock:
-
-        c = connect()
-
-        count = lambda sql: (
-            c.execute(sql)
-            .fetchone()["n"]
-        )
-
-        d = {
-            "contacts": count(
-                "SELECT COUNT(*) n FROM contacts"
-            ),
-
-            "opted_in": count(
-                """
-                SELECT COUNT(*) n
-                FROM contacts
-                WHERE opt_in=1
-                """
-            ),
-
-            "active_conversations": count(
-                """
-                SELECT COUNT(*) n
-                FROM contacts
-                WHERE conversation_active=1
-                """
-            ),
-
-            "queue_pending": count(
-                """
-                SELECT COUNT(*) n
-                FROM queue
-                WHERE status='pending'
-                """
-            ),
-
-            "processing": count(
-                """
-                SELECT COUNT(*) n
-                FROM queue
-                WHERE status='processing'
-                """
-            ),
-
-            "sent": count(
-                """
-                SELECT COUNT(*) n
-                FROM queue
-                WHERE status='sent'
-                """
-            ),
-
-            "delivered": count(
-                """
-                SELECT COUNT(*) n
-                FROM queue
-                WHERE status='delivered'
-                """
-            ),
-
-            "read": count(
-                """
-                SELECT COUNT(*) n
-                FROM queue
-                WHERE status='read'
-                """
-            ),
-
-            "failed": count(
-                """
-                SELECT COUNT(*) n
-                FROM queue
-                WHERE status='failed'
-                """
-            ),
-
-            "blocked": count(
-                """
-                SELECT COUNT(*) n
-                FROM events
-                WHERE event_type='blocked'
-                """
-            ),
-
-            "rules": {
-                "active_window_hours":
-                    ACTIVE_WINDOW_HOURS,
-
-                "min_delay_seconds":
-                    MIN_DELAY_SECONDS,
-
-                "max_delay_seconds":
-                    MAX_DELAY_SECONDS,
-            }
-        }
-
-        d["recent_events"] = [
-            dict(row)
-            for row in c.execute(
-                """
-                SELECT
-                    phone,
-                    event_type,
-                    detail,
-                    created_at
-                FROM events
-                ORDER BY id DESC
-                LIMIT 30
-                """
-            ).fetchall()
-        ]
-
-        c.close()
-
-        return d
-
-
 def list_queue(limit=100):
+    c = connect()
 
-    with _lock:
+    rows = c.execute(
+        """
+        SELECT *
+        FROM queue
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (int(limit),),
+    ).fetchall()
 
-        c = connect()
+    result = [dict(row) for row in rows]
 
-        rows = c.execute(
+    c.close()
+
+    return result
+
+
+def dashboard():
+    c = connect()
+
+    result = {}
+
+    for status in (
+        "pending",
+        "processing",
+        "sent",
+        "failed",
+        "blocked",
+    ):
+        row = c.execute(
             """
-            SELECT
-                id,
-                phone,
-                message,
-                status,
-                reason,
-                created_at,
-                started_at,
-                sent_at,
-                error,
-                evolution_message_id,
-                delivery_status,
-                delivered_at,
-                read_at
+            SELECT COUNT(*) AS total
             FROM queue
-            ORDER BY created_at DESC
-            LIMIT ?
+            WHERE status=?
             """,
-            (limit,)
-        ).fetchall()
+            (status,),
+        ).fetchone()
 
-        c.close()
+        result[status] = int(row["total"])
 
-        return [
-            dict(x)
-            for x in rows
-        ]
+    row = c.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM contacts
+        """
+    ).fetchone()
+
+    result["contacts"] = int(row["total"])
+
+    row = c.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM contacts
+        WHERE opt_in=1
+        """
+    ).fetchone()
+
+    result["opted_in"] = int(row["total"])
+
+    row = c.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM contacts
+        WHERE conversation_active=1
+        """
+    ).fetchone()
+
+    result["active_conversations"] = int(row["total"])
+
+    c.close()
+
+    return result
 
 
+# Inicializa o banco quando o módulo é carregado.
 init_db()
