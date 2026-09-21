@@ -562,19 +562,11 @@ def enqueue(
 
 
 def claim_next():
-    """
-    Retira da fila o próximo item elegível.
-
-    Regras:
-      - opt_in obrigatoriamente 1
-      - opt_out obrigatoriamente 0
-      - service exige conversation_active=1
-      - campaign não exige conversation_active
-    """
 
     expire_inactive()
 
     with _lock:
+
         c = connect()
 
         r = c.execute(
@@ -594,10 +586,20 @@ def claim_next():
         ).fetchone()
 
         if not r:
+
             c.close()
             return None
 
+        send_mode = str(
+            r["send_mode"] or "service"
+        ).strip().lower()
+
+        # -------------------------------------------------
+        # SEGURANÇA UNIVERSAL
+        # -------------------------------------------------
+
         if not r["opt_in"]:
+
             c.execute(
                 """
                 UPDATE queue
@@ -609,15 +611,15 @@ def claim_next():
                 (
                     "blocked",
                     "Sem opt-in explícito",
-                    r["id"],
-                ),
+                    r["id"]
+                )
             )
 
             event(
                 c,
                 r["phone"],
                 "blocked",
-                "Fila bloqueada: sem opt-in",
+                "Sem opt-in explícito"
             )
 
             c.commit()
@@ -626,6 +628,7 @@ def claim_next():
             return None
 
         if r["opt_out"]:
+
             c.execute(
                 """
                 UPDATE queue
@@ -637,15 +640,15 @@ def claim_next():
                 (
                     "blocked",
                     "Opt-out explícito",
-                    r["id"],
-                ),
+                    r["id"]
+                )
             )
 
             event(
                 c,
                 r["phone"],
                 "blocked",
-                "Fila bloqueada: opt-out",
+                "Opt-out explícito"
             )
 
             c.commit()
@@ -653,10 +656,22 @@ def claim_next():
 
             return None
 
+        # -------------------------------------------------
+        # REGRA DE CONVERSA ATIVA
+        #
+        # SERVICE:
+        #   precisa de conversa ativa.
+        #
+        # CAMPAIGN:
+        #   não precisa de conversa ativa,
+        #   mas continua exigindo opt-in explícito.
+        # -------------------------------------------------
+
         if (
-            r["send_mode"] == "service"
+            send_mode == "service"
             and not r["conversation_active"]
         ):
+
             c.execute(
                 """
                 UPDATE queue
@@ -668,21 +683,25 @@ def claim_next():
                 (
                     "blocked",
                     "Conversa inativa",
-                    r["id"],
-                ),
+                    r["id"]
+                )
             )
 
             event(
                 c,
                 r["phone"],
                 "blocked",
-                "Fila bloqueada: conversa inativa",
+                "Conversa inativa para envio service"
             )
 
             c.commit()
             c.close()
 
             return None
+
+        # -------------------------------------------------
+        # CLAIM
+        # -------------------------------------------------
 
         c.execute(
             """
@@ -695,8 +714,8 @@ def claim_next():
             (
                 "processing",
                 iso(now()),
-                r["id"],
-            ),
+                r["id"]
+            )
         )
 
         c.commit()
