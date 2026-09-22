@@ -30,7 +30,6 @@ app = Flask(__name__)
 app.secret_key = 'crm_imobiliario_secret_2024'
 CORS(app)
 
-
 # ─────────────────────────────────────────────
 # ARMAZENAMENTO PERSISTENTE
 # ─────────────────────────────────────────────
@@ -43,31 +42,17 @@ CRM_DATA_ROOT = Path(
 )
 
 DATABASE_ROOT = CRM_DATA_ROOT / "database"
+DB_PATH = DATABASE_ROOT / "crm.db"
 
-# ============================================================
-# ARMAZENAMENTO PERSISTENTE DO CRM
-# ============================================================
-
-CRM_DATA_ROOT = Path(
-    os.getenv(
-        "CRM_DATA_ROOT",
-        "/content/drive/MyDrive/BERTI_BOT"
-    )
-)
-
-DB_PATH = CRM_DATA_ROOT / "database" / "crm.db"
-
-
-# ============================================================
+# ─────────────────────────────────────────────
 # WHATSAPP / MÍDIAS DE CAMPANHAS
-# ============================================================
+# ─────────────────────────────────────────────
 
 MEDIA_ROOT = Path(
     os.getenv(
         "CRM_MEDIA_ROOT",
         str(
-            CRM_DATA_ROOT
-            / "database"
+            DATABASE_ROOT
             / "campanhas"
             / "midias"
         )
@@ -353,10 +338,13 @@ def init_db():
         ('quintoandar_ativo', '1'),
     ]
     for k, v in configs:
-        c.execute('INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES (?, ?)', (k, v))
+        c.execute(
+            'INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES (?, ?)',
+            (k, v)
+        )
 
     # ─────────────────────────────────────────
-    # MIGRAÇÃO — OPT-IN DO WHATSAPP
+    # MIGRAÇÃO — OPT-IN / OPT-OUT DO WHATSAPP
     # ─────────────────────────────────────────
 
     lead_columns = {
@@ -366,39 +354,18 @@ def init_db():
         ).fetchall()
     }
 
-    if "whatsapp_opt_in" not in lead_columns:
-        c.execute(
-            """
-            ALTER TABLE leads
-            ADD COLUMN whatsapp_opt_in INTEGER
-            NOT NULL DEFAULT 0
-            """
-        )
+    lead_fields = {
+        "whatsapp_opt_in": "INTEGER NOT NULL DEFAULT 0",
+        "whatsapp_opt_in_source": "TEXT",
+        "whatsapp_opt_in_at": "DATETIME",
+        "whatsapp_opt_out": "INTEGER NOT NULL DEFAULT 0",
+    }
 
-    if "whatsapp_opt_in_source" not in lead_columns:
-        c.execute(
-            """
-            ALTER TABLE leads
-            ADD COLUMN whatsapp_opt_in_source TEXT
-            """
-        )
-
-    if "whatsapp_opt_in_at" not in lead_columns:
-        c.execute(
-            """
-            ALTER TABLE leads
-            ADD COLUMN whatsapp_opt_in_at DATETIME
-            """
-        )
-
-    if "whatsapp_opt_out" not in lead_columns:
-        c.execute(
-            """
-            ALTER TABLE leads
-            ADD COLUMN whatsapp_opt_out INTEGER
-            NOT NULL DEFAULT 0
-            """
-        )
+    for column, definition in lead_fields.items():
+        if column not in lead_columns:
+            c.execute(
+                f"ALTER TABLE leads ADD COLUMN {column} {definition}"
+            )
 
     # ─────────────────────────────────────────
     # MIGRAÇÃO — MÍDIA DAS CAMPANHAS
@@ -420,14 +387,9 @@ def init_db():
     }
 
     for column, definition in campaign_fields.items():
-
         if column not in campaign_columns:
-
             c.execute(
-                f"""
-                ALTER TABLE mensagens_whatsapp
-                ADD COLUMN {column} {definition}
-                """
+                f"ALTER TABLE mensagens_whatsapp ADD COLUMN {column} {definition}"
             )
 
     MEDIA_ROOT.mkdir(
@@ -725,7 +687,12 @@ def lead_detail(id):
     return jsonify({'success': True})
 
 # ─────────────────────────────────────────────
-# WHATSAPP — OPT-IN MANUAL DO LEAD
+# INTERAÇÕES
+# ─────────────────────────────────────────────
+
+
+# ─────────────────────────────────────────────
+# WHATSAPP — OPT-IN / OPT-OUT MANUAL DO LEAD
 # ─────────────────────────────────────────────
 
 @app.route(
@@ -735,10 +702,13 @@ def lead_detail(id):
 @login_required
 def atualizar_whatsapp_optin(id):
 
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
 
     opt_in = bool(
-        data.get("opt_in", False)
+        data.get(
+            "opt_in",
+            False
+        )
     )
 
     source = str(
@@ -750,55 +720,69 @@ def atualizar_whatsapp_optin(id):
 
     conn = get_db()
 
-    lead = conn.execute(
-        """
-        SELECT id, nome, telefone
-        FROM leads
-        WHERE id=?
-        """,
-        (id,)
-    ).fetchone()
+    try:
 
-    if not lead:
+        lead = conn.execute(
+            """
+            SELECT
+                id,
+                nome,
+                telefone
+            FROM leads
+            WHERE id=?
+            """,
+            (id,)
+        ).fetchone()
+
+        if not lead:
+            return jsonify({
+                "success": False,
+                "error": "Lead não encontrado"
+            }), 404
+
+        if opt_in:
+
+            now_value = datetime.now().strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+
+            opt_out_value = 0
+
+            source_value = source or "Manual"
+
+        else:
+
+            now_value = None
+
+            opt_out_value = 1
+
+            source_value = ""
+
+        conn.execute(
+            """
+            UPDATE leads
+            SET
+                whatsapp_opt_in=?,
+                whatsapp_opt_in_source=?,
+                whatsapp_opt_in_at=?,
+                whatsapp_opt_out=?,
+                atualizado_em=CURRENT_TIMESTAMP
+            WHERE id=?
+            """,
+            (
+                int(opt_in),
+                source_value,
+                now_value,
+                opt_out_value,
+                id
+            )
+        )
+
+        conn.commit()
+
+    finally:
         conn.close()
 
-        return jsonify({
-            "success": False,
-            "error": "Lead não encontrado"
-        }), 404
-
-    now_value = (
-        datetime.now().strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
-        if opt_in
-        else None
-    )
-
-    conn.execute(
-        """
-        UPDATE leads
-        SET
-            whatsapp_opt_in=?,
-            whatsapp_opt_in_source=?,
-            whatsapp_opt_in_at=?,
-            whatsapp_opt_out=?,
-            atualizado_em=CURRENT_TIMESTAMP
-        WHERE id=?
-        """,
-        (
-            int(opt_in),
-            source if opt_in else "",
-            now_value,
-            0 if opt_in else 1,
-            id
-        )
-    )
-
-    conn.commit()
-    conn.close()
-
-    # Sincroniza com Safe Queue
     telefone = str(
         lead["telefone"] or ""
     ).strip()
@@ -811,16 +795,18 @@ def atualizar_whatsapp_optin(id):
                 phone=telefone,
                 name=lead["nome"] or "",
                 opt_in=opt_in,
-                opt_in_source=source if opt_in else "",
+                opt_in_source=source_value,
                 opt_in_at=now_value,
-                opt_out=not opt_in
+                opt_out=bool(
+                    opt_out_value
+                )
             )
 
         except Exception as exc:
 
             print(
-                "⚠️ Falha ao sincronizar opt-in "
-                "com Safe Queue:",
+                "⚠️ Falha ao sincronizar "
+                "opt-in/opt-out com Safe Queue:",
                 repr(exc)
             )
 
@@ -828,13 +814,11 @@ def atualizar_whatsapp_optin(id):
         "success": True,
         "lead_id": id,
         "opt_in": opt_in,
-        "source": source if opt_in else "",
+        "source": source_value,
         "opt_in_at": now_value,
+        "opt_out": bool(opt_out_value)
     })
 
-# ─────────────────────────────────────────────
-# INTERAÇÕES
-# ─────────────────────────────────────────────
 
 @app.route('/api/leads/<int:lead_id>/interacoes', methods=['POST'])
 @login_required
@@ -998,8 +982,9 @@ def tarefa_detail(id):
 # WHATSAPP DISPARADOR
 # ─────────────────────────────────────────────
 
+
 # ─────────────────────────────────────────────
-# WHATSAPP — UPLOAD DE MÍDIA DE CAMPANHA
+# WHATSAPP — UPLOAD DE MÍDIA DA CAMPANHA
 # ─────────────────────────────────────────────
 
 @app.route(
@@ -1034,12 +1019,15 @@ def upload_whatsapp_media():
     ).lower().strip()
 
     if mimetype in ALLOWED_MEDIA["image"]:
+
         media_type = "image"
 
     elif mimetype in ALLOWED_MEDIA["video"]:
+
         media_type = "video"
 
     else:
+
         return jsonify({
             "success": False,
             "error": (
@@ -1048,8 +1036,10 @@ def upload_whatsapp_media():
             )
         }), 400
 
-    # Limita tamanho
-    uploaded.stream.seek(0, os.SEEK_END)
+    uploaded.stream.seek(
+        0,
+        os.SEEK_END
+    )
 
     size = uploaded.stream.tell()
 
@@ -1110,92 +1100,127 @@ def upload_whatsapp_media():
         "size": size,
     })
 
+
 @app.route('/api/whatsapp/campanhas', methods=['GET', 'POST'])
 @login_required
 def campanhas_whatsapp():
+
     conn = get_db()
 
     try:
-        # ----------------------------------------------------
-        # GET — listar campanhas
-        # ----------------------------------------------------
+
         if request.method == 'GET':
+
             rows = conn.execute(
-                '''
+                """
                 SELECT *
                 FROM mensagens_whatsapp
                 ORDER BY criado_em DESC
-                '''
+                """
             ).fetchall()
 
-            return jsonify([dict(r) for r in rows])
+            return jsonify([
+                dict(row)
+                for row in rows
+            ])
 
-        # ----------------------------------------------------
-        # POST — criar campanha
-        # ----------------------------------------------------
-        data = request.get_json(silent=True) or {}
+        data = request.get_json(
+            silent=True
+        ) or {}
 
         nome_campanha = str(
-            data.get('nome_campanha', '')
+            data.get(
+                'nome_campanha',
+                ''
+            )
         ).strip()
 
         mensagem = str(
-            data.get('mensagem', '')
+            data.get(
+                'mensagem',
+                ''
+            )
         )
 
-        contatos = data.get('contatos', [])
+        contatos = data.get(
+            'contatos',
+            []
+        )
 
         intervalo_segundos = data.get(
             'intervalo_segundos',
-            5
+            8
         )
 
-        # ----------------------------------------------------
-        # VALIDAÇÕES BÁSICAS
-        # ----------------------------------------------------
-
         if not nome_campanha:
+
             return jsonify({
                 'success': False,
-                'error': 'nome_campanha é obrigatório'
+                'error': (
+                    'nome_campanha é obrigatório'
+                )
             }), 400
 
-        if not isinstance(contatos, list):
+        if not isinstance(
+            contatos,
+            list
+        ):
+
             return jsonify({
                 'success': False,
-                'error': 'contatos deve ser uma lista'
+                'error': (
+                    'contatos deve ser uma lista'
+                )
             }), 400
 
         try:
-            intervalo_segundos = int(intervalo_segundos)
-        except (TypeError, ValueError):
+
+            intervalo_segundos = int(
+                intervalo_segundos
+            )
+
+        except (
+            TypeError,
+            ValueError
+        ):
+
             return jsonify({
                 'success': False,
-                'error': 'intervalo_segundos inválido'
+                'error': (
+                    'intervalo_segundos inválido'
+                )
             }), 400
 
         if intervalo_segundos < 0:
+
             return jsonify({
                 'success': False,
-                'error': 'intervalo_segundos não pode ser negativo'
+                'error': (
+                    'intervalo_segundos '
+                    'não pode ser negativo'
+                )
             }), 400
 
-        # ----------------------------------------------------
-        # DADOS DA MÍDIA
-        # ----------------------------------------------------
-        # A mídia já deve ter sido enviada pelo endpoint
-        # /api/whatsapp/media.
-        #
-        # O frontend envia os metadados retornados pelo upload.
-        # ----------------------------------------------------
+        media_path = data.get(
+            'media_path'
+        )
 
-        media_path = data.get('media_path')
-        media_name = data.get('media_name')
-        media_type = data.get('media_type')
-        media_mimetype = data.get('media_mimetype')
-        media_caption = data.get('media_caption')
+        media_name = data.get(
+            'media_name'
+        )
 
-        # Normalizar strings vazias para None
+        media_type = data.get(
+            'media_type'
+        )
+
+        media_mimetype = data.get(
+            'media_mimetype'
+        )
+
+        media_caption = data.get(
+            'media_caption'
+        )
+
         media_path = (
             str(media_path).strip()
             if media_path
@@ -1209,13 +1234,13 @@ def campanhas_whatsapp():
         )
 
         media_type = (
-            str(media_type).strip()
+            str(media_type).strip().lower()
             if media_type
             else None
         )
 
         media_mimetype = (
-            str(media_mimetype).strip()
+            str(media_mimetype).strip().lower()
             if media_mimetype
             else None
         )
@@ -1226,38 +1251,15 @@ def campanhas_whatsapp():
             else None
         )
 
-       # ----------------------------------------------------
-        # VALIDAR MÍDIA, SE INFORMADA
-        # ----------------------------------------------------
-
         if media_path:
 
-            media_root_resolvido = Path(
-                MEDIA_ROOT
-            ).resolve()
-
-            caminho_recebido = Path(
-                str(media_path).strip()
+            media_root_resolvido = (
+                MEDIA_ROOT.resolve()
             )
 
-            # ------------------------------------------------
-            # RESOLVER O CAMINHO DA MÍDIA
-            # ------------------------------------------------
-            #
-            # O frontend pode enviar:
-            #
-            # 1. caminho absoluto:
-            #    /content/drive/MyDrive/...
-            #
-            # 2. caminho relativo:
-            #    arquivo.jpg
-            #
-            # 3. caminho relativo contendo estrutura:
-            #    database/campanhas/midias/arquivo.jpg
-            #
-            # Em todos os casos, o arquivo precisa estar
-            # fisicamente dentro de MEDIA_ROOT.
-            # ------------------------------------------------
+            caminho_recebido = Path(
+                media_path
+            )
 
             if caminho_recebido.is_absolute():
 
@@ -1267,35 +1269,27 @@ def campanhas_whatsapp():
 
             else:
 
-                # Primeiro tenta diretamente dentro
-                # de MEDIA_ROOT.
                 caminho_midia = (
-                    media_root_resolvido /
-                    caminho_recebido
-                ).resolve()
+                    (
+                        media_root_resolvido
+                        / caminho_recebido
+                    ).resolve()
+                )
 
-                # Caso tenha vindo algo como:
-                #
-                # database/campanhas/midias/arquivo.jpg
-                #
-                # tenta localizar apenas pelo nome.
                 if not caminho_midia.is_file():
 
                     caminho_por_nome = (
-                        media_root_resolvido /
-                        caminho_recebido.name
-                    ).resolve()
+                        (
+                            media_root_resolvido
+                            / caminho_recebido.name
+                        ).resolve()
+                    )
 
                     if caminho_por_nome.is_file():
 
                         caminho_midia = (
                             caminho_por_nome
                         )
-
-            # ------------------------------------------------
-            # SEGURANÇA
-            # Garantir que o arquivo está dentro de MEDIA_ROOT.
-            # ------------------------------------------------
 
             try:
 
@@ -1310,33 +1304,21 @@ def campanhas_whatsapp():
                     'error': 'media_path inválido'
                 }), 400
 
-            # ------------------------------------------------
-            # GARANTIR QUE O ARQUIVO EXISTE
-            # ------------------------------------------------
-
             if not caminho_midia.is_file():
 
                 return jsonify({
                     'success': False,
-                    'error': 'arquivo de mídia não encontrado'
+                    'error': (
+                        'arquivo de mídia '
+                        'não encontrado'
+                    )
                 }), 400
-
-            # ------------------------------------------------
-            # NORMALIZAR O CAMINHO
-            #
-            # O banco grava somente o caminho relativo
-            # à pasta MEDIA_ROOT.
-            # ------------------------------------------------
 
             media_path = str(
                 caminho_midia.relative_to(
                     media_root_resolvido
                 )
             )
-
-            # ------------------------------------------------
-            # VALIDAR TIPO DA MÍDIA
-            # ------------------------------------------------
 
             if media_type not in ALLOWED_MEDIA:
 
@@ -1346,26 +1328,26 @@ def campanhas_whatsapp():
                 }), 400
 
             mimetypes_permitidos = (
-                ALLOWED_MEDIA[media_type]
+                ALLOWED_MEDIA[
+                    media_type
+                ]
             )
 
-            if media_mimetype not in mimetypes_permitidos:
+            if (
+                media_mimetype
+                not in mimetypes_permitidos
+            ):
 
                 return jsonify({
                     'success': False,
                     'error': (
-                        'media_mimetype incompatível '
-                        'com media_type'
+                        'media_mimetype '
+                        'incompatível com '
+                        'media_type'
                     )
                 }), 400
 
         else:
-
-            # ------------------------------------------------
-            # SEM MÍDIA
-            #
-            # Somente aqui devemos limpar os metadados.
-            # ------------------------------------------------
 
             media_path = None
             media_name = None
@@ -1373,13 +1355,9 @@ def campanhas_whatsapp():
             media_mimetype = None
             media_caption = None
 
-        # ----------------------------------------------------
-        # CRIAR CAMPANHA
-        # ----------------------------------------------------
-
         conn.execute(
-            '''
-            INSERT INTO mensagens_whatsapp (
+            """
+            INSERT INTO mensagens_whatsapp(
                 nome_campanha,
                 mensagem,
                 lista_contatos,
@@ -1392,8 +1370,10 @@ def campanhas_whatsapp():
                 media_mimetype,
                 media_caption
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''',
+            VALUES(
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            """,
             (
                 nome_campanha,
                 mensagem,
@@ -1405,49 +1385,55 @@ def campanhas_whatsapp():
                 media_name,
                 media_type,
                 media_mimetype,
-                media_caption,
+                media_caption
             )
         )
 
-        campanha_id = conn.execute(
-            'SELECT last_insert_rowid()'
-        ).fetchone()[0]
-
-        # ----------------------------------------------------
-        # CONTATOS DA CAMPANHA
-        # ----------------------------------------------------
+        campanha_id = (
+            conn.execute(
+                'SELECT last_insert_rowid()'
+            )
+            .fetchone()[0]
+        )
 
         for contato in contatos:
 
-            if not isinstance(contato, dict):
+            if not isinstance(
+                contato,
+                dict
+            ):
                 continue
 
-            telefone = contato.get('telefone')
+            telefone = str(
+                contato.get(
+                    'telefone',
+                    ''
+                )
+            ).strip()
 
             if not telefone:
                 continue
 
             conn.execute(
-                '''
-                INSERT INTO contatos_whatsapp (
+                """
+                INSERT INTO contatos_whatsapp(
                     campanha_id,
                     nome,
                     telefone
                 )
-                VALUES (?, ?, ?)
-                ''',
+                VALUES(?, ?, ?)
+                """,
                 (
                     campanha_id,
-                    contato.get('nome', ''),
+                    contato.get(
+                        'nome',
+                        ''
+                    ),
                     telefone
                 )
             )
 
         conn.commit()
-
-        # ----------------------------------------------------
-        # RETORNO
-        # ----------------------------------------------------
 
         return jsonify({
             'success': True,
@@ -1463,114 +1449,549 @@ def campanhas_whatsapp():
         })
 
     except Exception:
+
         conn.rollback()
+
         raise
 
     finally:
+
         conn.close()
 
 
-@app.route('/api/whatsapp/campanhas/<int:id>/iniciar', methods=['POST'])
+@app.route(
+    '/api/whatsapp/campanhas/<int:id>/iniciar',
+    methods=['POST']
+)
 @login_required
 def iniciar_campanha(id):
+
     conn = get_db()
-    campanha = conn.execute('SELECT * FROM mensagens_whatsapp WHERE id=?', (id,)).fetchone()
-    if not campanha:
-        conn.close()
-        return jsonify({'error': 'Campanha não encontrada'}), 404
-    config = conn.execute('SELECT * FROM configuracoes WHERE chave IN ("whatsapp_api_url","whatsapp_token")').fetchall()
-    configs = {r['chave']: r['valor'] for r in config}
-    conn.execute('UPDATE mensagens_whatsapp SET status="Enviando",iniciado_em=CURRENT_TIMESTAMP WHERE id=?', (id,))
-    conn.commit()
-    contatos = conn.execute('SELECT * FROM contatos_whatsapp WHERE campanha_id=? AND status="Pendente"', (id,)).fetchall()
-    conn.close()
 
-    def enviar_em_background():
-        enviados = 0
+    try:
+
+        campanha = conn.execute(
+            """
+            SELECT *
+            FROM mensagens_whatsapp
+            WHERE id=?
+            """,
+            (id,)
+        ).fetchone()
+
+        if not campanha:
+
+            return jsonify({
+                'success': False,
+                'error': 'Campanha não encontrada'
+            }), 404
+
+        if campanha['status'] in {
+            'Enviando',
+            'Enfileirada'
+        }:
+
+            return jsonify({
+                'success': False,
+                'error': (
+                    'Campanha já está '
+                    'em processamento'
+                )
+            }), 409
+
+        contatos = conn.execute(
+            """
+            SELECT *
+            FROM contatos_whatsapp
+            WHERE campanha_id=?
+              AND status='Pendente'
+            ORDER BY id
+            """,
+            (id,)
+        ).fetchall()
+
+        if not contatos:
+
+            conn.execute(
+                """
+                UPDATE mensagens_whatsapp
+                SET
+                    status='Concluido',
+                    iniciado_em=CURRENT_TIMESTAMP
+                WHERE id=?
+                """,
+                (id,)
+            )
+
+            conn.commit()
+
+            return jsonify({
+                'success': True,
+                'status': 'Concluido',
+                'enfileirados': 0,
+                'bloqueados': 0,
+                'erros': 0,
+                'message': (
+                    'Nenhum contato pendente.'
+                )
+            })
+
+        # Mapa dos leads autorizado pelo CRM.
+        lead_rows = conn.execute(
+            """
+            SELECT
+                nome,
+                telefone,
+                whatsapp_opt_in,
+                whatsapp_opt_in_source,
+                whatsapp_opt_in_at,
+                whatsapp_opt_out
+            FROM leads
+            WHERE telefone IS NOT NULL
+              AND telefone <> ''
+            """
+        ).fetchall()
+
+        lead_map = {}
+
+        for lead in lead_rows:
+
+            telefone = ''.join(
+                ch
+                for ch in str(
+                    lead['telefone']
+                )
+                if ch.isdigit()
+            )
+
+            if telefone and not telefone.startswith(
+                '55'
+            ):
+
+                telefone = (
+                    '55'
+                    + telefone
+                )
+
+            if telefone:
+
+                lead_map[
+                    telefone
+                ] = lead
+
+        enfileirados = 0
+        bloqueados = 0
         erros = 0
+
         for contato in contatos:
-            try:
-                telefone = ''.join(filter(str.isdigit, contato['telefone']))
-                if not telefone.startswith('55'):
-                    telefone = '55' + telefone
-                mensagem = campanha['mensagem']
-                # Personalização de variáveis
-                if contato['nome']:
-                    mensagem = mensagem.replace('{{nome}}', contato['nome'])
 
-                # Chamada à API do WhatsApp (Evolution API / WPPConnect)
-                api_url = configs.get('whatsapp_api_url', '')
-                token = configs.get('whatsapp_token', '')
-                sucesso = False
+            telefone = ''.join(
+                ch
+                for ch in str(
+                    contato['telefone']
+                    or ''
+                )
+                if ch.isdigit()
+            )
 
-                if api_url and token:
-                    try:
-                        resp = requests.post(
-                            f"{api_url}/message/sendText/default",
-                            headers={'apikey': token, 'Content-Type': 'application/json'},
-                            json={'number': telefone, 'text': mensagem},
-                            timeout=10
-                        )
-                        sucesso = resp.status_code in [200, 201]
-                    except:
-                        sucesso = False
-                else:
-                    # Modo simulação (sem API configurada)
-                    sucesso = True
-                    time.sleep(0.5)
+            if not telefone:
 
-                db = get_db()
-                if sucesso:
-                    db.execute('''UPDATE contatos_whatsapp SET status="Enviado",
-                        enviado_em=CURRENT_TIMESTAMP WHERE id=?''', (contato['id'],))
-                    enviados += 1
-                else:
-                    db.execute('''UPDATE contatos_whatsapp SET status="Erro",
-                        erro_msg="Falha no envio" WHERE id=?''', (contato['id'],))
-                    erros += 1
-                db.execute('''UPDATE mensagens_whatsapp SET enviados=?,erros=? WHERE id=?''',
-                           (enviados, erros, id))
-                db.commit(); db.close()
-                time.sleep(campanha['intervalo_segundos'])
-            except Exception as e:
+                conn.execute(
+                    """
+                    UPDATE contatos_whatsapp
+                    SET
+                        status=?,
+                        erro_msg=?
+                    WHERE id=?
+                    """,
+                    (
+                        'Erro',
+                        'Telefone inválido',
+                        contato['id']
+                    )
+                )
+
                 erros += 1
+                continue
 
-        db = get_db()
-        db.execute('''UPDATE mensagens_whatsapp SET status="Concluido",
-            concluido_em=CURRENT_TIMESTAMP WHERE id=?''', (id,))
-        db.commit(); db.close()
+            if not telefone.startswith(
+                '55'
+            ):
 
-    thread = threading.Thread(target=enviar_em_background, daemon=True)
-    thread.start()
-    return jsonify({'success': True, 'message': 'Campanha iniciada!'})
+                telefone = (
+                    '55'
+                    + telefone
+                )
 
-@app.route('/api/whatsapp/campanhas/<int:id>', methods=['GET'])
+            lead = lead_map.get(
+                telefone
+            )
+
+            if not lead:
+
+                conn.execute(
+                    """
+                    UPDATE contatos_whatsapp
+                    SET
+                        status=?,
+                        erro_msg=?
+                    WHERE id=?
+                    """,
+                    (
+                        'Bloqueado',
+                        (
+                            'Lead não localizado '
+                            'no CRM'
+                        ),
+                        contato['id']
+                    )
+                )
+
+                bloqueados += 1
+                continue
+
+            if (
+                not lead['whatsapp_opt_in']
+                or lead['whatsapp_opt_out']
+            ):
+
+                conn.execute(
+                    """
+                    UPDATE contatos_whatsapp
+                    SET
+                        status=?,
+                        erro_msg=?
+                    WHERE id=?
+                    """,
+                    (
+                        'Bloqueado',
+                        (
+                            'Sem opt-in explícito '
+                            'ou com opt-out'
+                        ),
+                        contato['id']
+                    )
+                )
+
+                bloqueados += 1
+                continue
+
+            # Sincroniza o contato com a Safe Queue antes do enqueue.
+            upsert_contact(
+                phone=telefone,
+                name=(
+                    contato['nome']
+                    or lead['nome']
+                    or ''
+                ),
+                opt_in=True,
+                opt_in_source=(
+                    lead['whatsapp_opt_in_source']
+                    or ''
+                ),
+                opt_in_at=(
+                    lead['whatsapp_opt_in_at']
+                ),
+                opt_out=False
+            )
+
+            mensagem = str(
+                campanha['mensagem']
+                or ''
+            )
+
+            nome = str(
+                contato['nome']
+                or lead['nome']
+                or ''
+            )
+
+            mensagem = mensagem.replace(
+                '{{nome}}',
+                nome
+            )
+
+            try:
+
+                resultado = safe_enqueue(
+                    phone=telefone,
+                    message=mensagem,
+                    require_active=False,
+                    send_mode='campaign',
+                    media_path=(
+                        campanha['media_path']
+                        if 'media_path'
+                        in campanha.keys()
+                        else None
+                    ),
+                    media_name=(
+                        campanha['media_name']
+                        if 'media_name'
+                        in campanha.keys()
+                        else None
+                    ),
+                    media_type=(
+                        campanha['media_type']
+                        if 'media_type'
+                        in campanha.keys()
+                        else None
+                    ),
+                    media_mimetype=(
+                        campanha['media_mimetype']
+                        if 'media_mimetype'
+                        in campanha.keys()
+                        else None
+                    ),
+                    media_caption=(
+                        campanha['media_caption']
+                        if 'media_caption'
+                        in campanha.keys()
+                        else None
+                    )
+                )
+
+            except Exception as exc:
+
+                conn.execute(
+                    """
+                    UPDATE contatos_whatsapp
+                    SET
+                        status=?,
+                        erro_msg=?
+                    WHERE id=?
+                    """,
+                    (
+                        'Erro',
+                        str(exc)[:500],
+                        contato['id']
+                    )
+                )
+
+                erros += 1
+                continue
+
+            if resultado.get(
+                'accepted'
+            ):
+
+                conn.execute(
+                    """
+                    UPDATE contatos_whatsapp
+                    SET
+                        status=?,
+                        erro_msg=NULL
+                    WHERE id=?
+                    """,
+                    (
+                        'Enfileirado',
+                        contato['id']
+                    )
+                )
+
+                enfileirados += 1
+
+            else:
+
+                conn.execute(
+                    """
+                    UPDATE contatos_whatsapp
+                    SET
+                        status=?,
+                        erro_msg=?
+                    WHERE id=?
+                    """,
+                    (
+                        'Bloqueado',
+                        resultado.get(
+                            'reason',
+                            'bloqueado'
+                        ),
+                        contato['id']
+                    )
+                )
+
+                bloqueados += 1
+
+        novo_status = (
+            'Enfileirada'
+            if enfileirados
+            else 'Concluido'
+        )
+
+        conn.execute(
+            """
+            UPDATE mensagens_whatsapp
+            SET
+                status=?,
+                iniciado_em=CURRENT_TIMESTAMP,
+                erros=?
+            WHERE id=?
+            """,
+            (
+                novo_status,
+                bloqueados + erros,
+                id
+            )
+        )
+
+        conn.commit()
+
+        return jsonify({
+            'success': True,
+            'status': novo_status,
+            'enfileirados': enfileirados,
+            'bloqueados': bloqueados,
+            'erros': erros,
+            'message': (
+                'Campanha colocada '
+                'na fila segura.'
+            )
+        })
+
+    except Exception:
+
+        conn.rollback()
+
+        raise
+
+    finally:
+
+        conn.close()
+
+
+@app.route(
+    '/api/whatsapp/campanhas/<int:id>',
+    methods=['GET']
+)
 @login_required
 def campanha_status(id):
-    conn = get_db()
-    camp = conn.execute('SELECT * FROM mensagens_whatsapp WHERE id=?', (id,)).fetchone()
-    contatos = conn.execute('SELECT * FROM contatos_whatsapp WHERE campanha_id=? ORDER BY id', (id,)).fetchall()
-    conn.close()
-    return jsonify({'campanha': dict(camp) if camp else {}, 'contatos': [dict(c) for c in contatos]})
 
-@app.route('/api/whatsapp/template', methods=['POST'])
+    conn = get_db()
+
+    try:
+
+        camp = conn.execute(
+            """
+            SELECT *
+            FROM mensagens_whatsapp
+            WHERE id=?
+            """,
+            (id,)
+        ).fetchone()
+
+        contatos = conn.execute(
+            """
+            SELECT *
+            FROM contatos_whatsapp
+            WHERE campanha_id=?
+            ORDER BY id
+            """,
+            (id,)
+        ).fetchall()
+
+        return jsonify({
+            'campanha': (
+                dict(camp)
+                if camp
+                else {}
+            ),
+            'contatos': [
+                dict(c)
+                for c in contatos
+            ]
+        })
+
+    finally:
+
+        conn.close()
+
+
+@app.route(
+    '/api/whatsapp/template',
+    methods=['POST']
+)
 @login_required
 def whatsapp_template():
-    """Gera lista de contatos a partir de filtros de leads"""
-    data = request.json
+
+    data = request.get_json(
+        silent=True
+    ) or {}
+
     conn = get_db()
-    filtros = []
-    params = []
-    if data.get('status'):
-        filtros.append('status=?'); params.append(data['status'])
-    if data.get('temperatura'):
-        filtros.append('temperatura=?'); params.append(data['temperatura'])
-    if data.get('tipo_interesse'):
-        filtros.append('tipo_interesse=?'); params.append(data['tipo_interesse'])
-    where = ('WHERE ' + ' AND '.join(filtros) + ' AND telefone != ""') if filtros else 'WHERE telefone != ""'
-    leads = conn.execute(f'SELECT nome, telefone FROM leads {where}', params).fetchall()
-    conn.close()
-    return jsonify([dict(l) for l in leads])
+
+    try:
+
+        filtros = []
+        params = []
+
+        if data.get('status'):
+
+            filtros.append(
+                'status=?'
+            )
+
+            params.append(
+                data['status']
+            )
+
+        if data.get('temperatura'):
+
+            filtros.append(
+                'temperatura=?'
+            )
+
+            params.append(
+                data['temperatura']
+            )
+
+        if data.get('tipo_interesse'):
+
+            filtros.append(
+                'tipo_interesse=?'
+            )
+
+            params.append(
+                data['tipo_interesse']
+            )
+
+        where_parts = filtros + [
+            'telefone != ""',
+            'whatsapp_opt_in=1',
+            'whatsapp_opt_out=0'
+        ]
+
+        where = (
+            'WHERE '
+            + ' AND '.join(
+                where_parts
+            )
+        )
+
+        leads_rows = conn.execute(
+            f"""
+            SELECT
+                nome,
+                telefone,
+                whatsapp_opt_in,
+                whatsapp_opt_in_source,
+                whatsapp_opt_in_at,
+                whatsapp_opt_out
+            FROM leads
+            {where}
+            ORDER BY nome
+            """,
+            params
+        ).fetchall()
+
+        return jsonify([
+            dict(row)
+            for row in leads_rows
+        ])
+
+    finally:
+
+        conn.close()
+
 
 # ─────────────────────────────────────────────
 # CONFIGURAÇÕES
