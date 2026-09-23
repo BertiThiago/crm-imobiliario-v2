@@ -416,32 +416,6 @@ const POST = (url,b) => api('POST', url, b);
 const PUT = (url,b) => api('PUT', url, b);
 const DEL = url => api('DELETE', url);
 
-// Upload de mídia de campanha (multipart/form-data)
-async function uploadWhatsappMedia(file, caption='') {
-  const formData = new FormData();
-  formData.append('file', file);
-
-  const r = await fetch('/api/whatsapp/media', {
-    method: 'POST',
-    credentials: 'include',
-    body: formData
-  });
-
-  let data;
-  try {
-    data = await r.json();
-  } catch (e) {
-    throw new Error(`Resposta inválida do servidor (HTTP ${r.status})`);
-  }
-
-  if(!r.ok || !data.success) {
-    throw new Error(data.error || `Falha no upload da mídia (HTTP ${r.status})`);
-  }
-
-  data.media_caption = caption || '';
-  return data;
-}
-
 // ══════════════════════════════════════════════
 // AUTH
 // ══════════════════════════════════════════════
@@ -801,21 +775,6 @@ async function abrirLead(id) {
         <div class="form-group"><label>Valor Interesse</label><input id="el-valor" type="number" value="${l.valor_interesse||''}"></div>
         <div class="form-group form-full"><label>Observações</label><textarea id="el-obs">${l.observacoes||''}</textarea></div>
       </div>
-      <div class="card" style="margin-top:16px;padding:14px;border-color:${Number(l.whatsapp_opt_in)===1 && Number(l.whatsapp_opt_out||0)===0 ? 'rgba(34,197,94,.35)' : 'rgba(239,68,68,.35)'}">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-          <div>
-            <div style="font-weight:700"><i class="fab fa-whatsapp" style="color:#25d366"></i> WhatsApp</div>
-            <div style="font-size:12px;color:var(--text2);margin-top:4px">
-              Status: <strong>${Number(l.whatsapp_opt_out||0)===1 ? 'OPT-OUT' : Number(l.whatsapp_opt_in)===1 ? 'OPT-IN ativo' : 'Sem opt-in'}</strong>
-              ${l.whatsapp_opt_in_source ? ` • origem: ${l.whatsapp_opt_in_source}` : ''}
-            </div>
-          </div>
-          <div style="display:flex;gap:8px">
-            <button class="btn btn-success btn-sm" onclick="registrarOptinWhatsApp(${id})"><i class="fas fa-check"></i> Registrar opt-in</button>
-            <button class="btn btn-danger btn-sm" onclick="registrarOptoutWhatsApp(${id})"><i class="fas fa-ban"></i> Registrar opt-out</button>
-          </div>
-        </div>
-      </div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn btn-primary btn-sm" onclick="salvarLead(${id})"><i class="fas fa-save"></i> Salvar</button>
         <button class="btn btn-success btn-sm" onclick="whatsappLead('${l.telefone}','${l.nome}')"><i class="fab fa-whatsapp"></i> WhatsApp</button>
@@ -865,23 +824,6 @@ async function abrirLead(id) {
 function tipoIcone(tipo) {
   const m = {Ligação:'call',Email:'email',Visita:'visita'};
   return m[tipo]||'nota';
-}
-
-async function registrarOptinWhatsApp(id) {
-  const origem = prompt('Como o opt-in foi obtido? Ex.: ligação, presencial, formulário, cliente respondeu no WhatsApp:', 'ligação');
-  if(!origem) return;
-  const r = await POST(`/leads/${id}/whatsapp-optin`, {opt_in:true, source:origem});
-  if(!r.success) return alert(`❌ ${r.error || 'Não foi possível registrar o opt-in.'}`);
-  alert('✅ Opt-in registrado com sucesso.');
-  abrirLead(id);
-}
-
-async function registrarOptoutWhatsApp(id) {
-  if(!confirm('Registrar OPT-OUT para este lead? O sistema bloqueará novos disparos.')) return;
-  const r = await POST(`/leads/${id}/whatsapp-optin`, {opt_in:false, source:'manual_optout'});
-  if(!r.success) return alert(`❌ ${r.error || 'Não foi possível registrar o opt-out.'}`);
-  alert('✅ Opt-out registrado.');
-  abrirLead(id);
 }
 
 async function salvarLead(id) {
@@ -1522,26 +1464,17 @@ async function renderWhatsapp() {
     <button class="btn btn-primary" onclick="modalNovaCampanha()"><i class="fab fa-whatsapp"></i> Nova Campanha</button>`;
 
   const statusCamp = s => {
-    const m = {Rascunho:'badge-frio',Enfileirada:'badge-blue',Enviando:'badge-morno',Concluido:'badge-fechado',Cancelado:'badge-perdido',Erro:'badge-perdido'};
+    const m = {Rascunho:'badge-frio',Enviando:'badge-morno',Concluido:'badge-fechado',Cancelado:'badge-perdido'};
     return `<span class="badge ${m[s]||'badge-frio'}">${s}</span>`;
   };
 
-  let safe = {};
-  try { safe = await GET('/whatsapp/safe/dashboard'); } catch(e) { safe = {}; }
-
   document.getElementById('content').innerHTML = `
-    <div class="stats-grid" style="margin-bottom:20px">
-      <div class="stat-card blue"><div class="stat-label">Pendentes</div><div class="stat-value">${safe.pending||0}</div><div class="stat-sub">aguardando worker</div></div>
-      <div class="stat-card purple"><div class="stat-label">Processando</div><div class="stat-value">${safe.processing||0}</div><div class="stat-sub">em envio</div></div>
-      <div class="stat-card green"><div class="stat-label">Enviados</div><div class="stat-value">${safe.sent||0}</div><div class="stat-sub">aceitos pela Evolution</div></div>
-      <div class="stat-card red"><div class="stat-label">Falhas/Bloqueios</div><div class="stat-value">${(safe.failed||0)+(safe.blocked||0)}</div><div class="stat-sub">falhas: ${safe.failed||0} • bloqueios: ${safe.blocked||0}</div></div>
-    </div>
     <div class="card" style="margin-bottom:20px;background:linear-gradient(135deg,rgba(37,211,102,0.1),rgba(18,140,126,0.1));border-color:rgba(37,211,102,0.3)">
       <div style="display:flex;align-items:center;gap:16px">
         <div style="font-size:40px">📱</div>
         <div>
           <div style="font-family:'Syne',sans-serif;font-weight:800;font-size:16px;color:#25d366">Disparador WhatsApp</div>
-          <div style="font-size:13px;color:var(--text2)">Campanhas usam a fila segura: somente leads com OPT-IN explícito e sem OPT-OUT entram no envio. O worker controla intervalo e a Evolution recebe o envio localmente.</div>
+          <div style="font-size:13px;color:var(--text2)">Envie mensagens em massa para seus leads. Configure a API nas Configurações para envio real (Evolution API / WPPConnect). Sem API = modo simulação.</div>
         </div>
       </div>
     </div>
@@ -1551,7 +1484,7 @@ async function renderWhatsapp() {
         <tbody>
           ${camps.map(c=>`
             <tr>
-              <td><div style="font-weight:600">${c.nome_campanha}</div><div style="font-size:11px;color:var(--text3)">${(c.mensagem||'').substring(0,60)}${(c.mensagem||'').length>60?'...':''}</div></td>
+              <td><div style="font-weight:600">${c.nome_campanha}</div><div style="font-size:11px;color:var(--text3)">${c.mensagem.substring(0,60)}${c.mensagem.length>60?'...':''}</div></td>
               <td>${statusCamp(c.status)}</td>
               <td>${c.total_contatos}</td>
               <td style="color:var(--green)">${c.enviados}</td>
@@ -1567,6 +1500,15 @@ async function renderWhatsapp() {
     </div>`;
 }
 
+let waMidia = {
+  path: null,
+  name: null,
+  type: null,
+  mimetype: null,
+  caption: null,
+  size: 0
+};
+
 async function modalNovaCampanha() {
   modal('Nova Campanha WhatsApp', `
     <div class="form-group" style="margin-bottom:16px">
@@ -1577,32 +1519,15 @@ async function modalNovaCampanha() {
       <label>Mensagem <small style="color:var(--text3)">(use {{nome}} para personalizar)</small></label>
       <textarea id="wa-msg" rows="5" placeholder="Olá {{nome}}! Temos uma oportunidade especial para você..."></textarea>
     </div>
-
-    <div style="margin-bottom:16px">
-      <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:8px">Mídia da Campanha</label>
-      <input
-        type="file"
-        id="wa-media-file"
-        accept="image/jpeg,image/png,image/webp,video/mp4"
-        onchange="selecionarMidiaCampanha()"
-        style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:9px;width:100%"
-      >
-      <div id="wa-media-info" style="display:none;margin-top:8px;padding:10px;background:var(--bg2);border:1px solid var(--border);border-radius:9px;font-size:12px;color:var(--text2)"></div>
-      <div class="form-group" style="margin-top:10px">
-        <label>Legenda da mídia</label>
-        <input id="wa-media-caption" placeholder="Legenda opcional para a imagem/vídeo">
-      </div>
-    </div>
-
     <div style="margin-bottom:16px">
       <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:8px">Intervalo entre envios</label>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="chip active" onclick="selecionarIntervalo(this,8)" id="int-8">8 seg</button>
-        <button class="chip" onclick="selecionarIntervalo(this,12)" id="int-12">12 seg</button>
-        <button class="chip" onclick="selecionarIntervalo(this,16)" id="int-16">16 seg</button>
-        <button class="chip" onclick="selecionarIntervalo(this,20)" id="int-20">20 seg</button>
+        <button class="chip active" onclick="selecionarIntervalo(this,3)" id="int-3">3 seg</button>
+        <button class="chip" onclick="selecionarIntervalo(this,5)" id="int-5">5 seg</button>
+        <button class="chip" onclick="selecionarIntervalo(this,10)" id="int-10">10 seg</button>
+        <button class="chip" onclick="selecionarIntervalo(this,30)" id="int-30">30 seg</button>
       </div>
-      <input type="hidden" id="wa-intervalo" value="8">
+      <input type="hidden" id="wa-intervalo" value="3">
     </div>
     <div style="margin-bottom:12px">
       <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:8px">Importar Contatos</label>
@@ -1620,30 +1545,219 @@ async function modalNovaCampanha() {
      <button class="btn btn-primary" onclick="criarCampanha()"><i class="fas fa-save"></i> Salvar Campanha</button>`, 'modal-lg');
 
   window._waContatos = [];
+
+  waMidia = {
+  path: null,
+  name: null,
+  type: null,
+  mimetype: null,
+  caption: null,
+  size: 0
+};
+}
+
+<div style="margin-bottom:16px">
+  <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:8px">
+    Mídia da Campanha
+  </label>
+
+  <input
+    type="file"
+    id="wa-media-file"
+    accept=".jpg,.jpeg,.png,.webp,.mp4,image/jpeg,image/png,image/webp,video/mp4"
+    onchange="selecionarMidiaCampanha(this)"
+    style="width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:9px"
+  >
+
+  <div
+    id="wa-media-info"
+    style="margin-top:8px;font-size:12px;color:var(--text3)"
+  >
+    Nenhuma mídia selecionada.
+  </div>
+
+  <div class="form-group" style="margin-top:10px">
+    <label>Legenda da mídia</label>
+    <textarea
+      id="wa-media-caption"
+      rows="2"
+      placeholder="Legenda opcional da imagem ou vídeo..."
+    ></textarea>
+  </div>
+
+  <div
+    id="wa-media-preview"
+    style="display:none;margin-top:10px"
+  ></div>
+</div>
+
+async function selecionarMidiaCampanha(input) {
+
+  const file = input.files?.[0];
+
+  if (!file) {
+    waMidia = {
+      path: null,
+      name: null,
+      type: null,
+      mimetype: null,
+      caption: null,
+      size: 0
+    };
+
+    document.getElementById('wa-media-info').textContent =
+      'Nenhuma mídia selecionada.';
+
+    document.getElementById('wa-media-preview').style.display = 'none';
+
+    return;
+  }
+
+  const info = document.getElementById('wa-media-info');
+
+  info.innerHTML = `
+    <span style="color:var(--accent)">
+      <i class="fas fa-spinner fa-spin"></i>
+      Enviando mídia...
+    </span>
+  `;
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+
+    const response = await fetch(
+      '/api/whatsapp/media',
+      {
+        method: 'POST',
+        body: formData,
+        credentials: 'include'
+      }
+    );
+
+    const result = await response.json();
+
+    if (!response.ok || !result.success) {
+      throw new Error(
+        result.error || 'Erro ao enviar mídia.'
+      );
+    }
+
+    waMidia = {
+      path: result.media_path,
+      name: result.media_name,
+      type: result.media_type,
+      mimetype: result.media_mimetype,
+      caption: '',
+      size: result.size || file.size
+    };
+
+    info.innerHTML = `
+      <div style="color:var(--green)">
+        <i class="fas fa-check-circle"></i>
+        ${result.media_name}
+      </div>
+      <div style="margin-top:3px">
+        ${result.media_type} · ${formatarTamanhoMidia(result.size || file.size)}
+      </div>
+    `;
+
+    mostrarPreviewMidia(file);
+
+  } catch (error) {
+
+    console.error('Erro ao enviar mídia:', error);
+
+    waMidia = {
+      path: null,
+      name: null,
+      type: null,
+      mimetype: null,
+      caption: null,
+      size: 0
+    };
+
+    input.value = '';
+
+    info.innerHTML = `
+      <span style="color:var(--red)">
+        <i class="fas fa-exclamation-circle"></i>
+        ${error.message}
+      </span>
+    `;
+
+    document.getElementById('wa-media-preview').style.display = 'none';
+
+    alert(`❌ Não foi possível enviar a mídia.\n\n${error.message}`);
+  }
+}
+
+function mostrarPreviewMidia(file) {
+
+  const preview = document.getElementById('wa-media-preview');
+
+  const url = URL.createObjectURL(file);
+
+  if (file.type.startsWith('image/')) {
+
+    preview.innerHTML = `
+      <div style="border:1px solid var(--border);border-radius:10px;padding:8px;background:var(--bg2)">
+        <img
+          src="${url}"
+          alt="Prévia da mídia"
+          style="max-width:100%;max-height:220px;display:block;margin:auto;border-radius:8px"
+        >
+      </div>
+    `;
+
+  } else if (file.type === 'video/mp4') {
+
+    preview.innerHTML = `
+      <div style="border:1px solid var(--border);border-radius:10px;padding:8px;background:var(--bg2)">
+        <video
+          controls
+          style="width:100%;max-height:220px;border-radius:8px"
+        >
+          <source src="${url}" type="${file.type}">
+        </video>
+      </div>
+    `;
+
+  } else {
+
+    preview.innerHTML = `
+      <div style="padding:12px;border:1px solid var(--border);border-radius:8px">
+        <i class="fas fa-file"></i>
+        ${file.name}
+      </div>
+    `;
+  }
+
+  preview.style.display = 'block';
+}
+
+function formatarTamanhoMidia(bytes) {
+
+  if (!bytes) return '0 B';
+
+  const unidades = ['B', 'KB', 'MB', 'GB'];
+
+  const i = Math.floor(
+    Math.log(bytes) / Math.log(1024)
+  );
+
+  return (
+    (bytes / Math.pow(1024, i)).toFixed(1)
+    + ' '
+    + unidades[i]
+  );
 }
 
 function selecionarIntervalo(btn, val) {
   document.querySelectorAll('.modal [id^="int-"]').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('wa-intervalo').value = val;
-}
-
-function selecionarMidiaCampanha() {
-  const input = document.getElementById('wa-media-file');
-  const info = document.getElementById('wa-media-info');
-  if(!input || !info) return;
-
-  const file = input.files?.[0];
-  if(!file) {
-    info.style.display = 'none';
-    info.textContent = '';
-    return;
-  }
-
-  const tamanhoMB = file.size / (1024 * 1024);
-  if(tamanhoMB > 64) { input.value=''; info.style.display='block'; info.innerHTML='<span style="color:var(--red)">❌ Arquivo maior que 64 MB.</span>'; return; }
-  info.style.display = 'block';
-  info.innerHTML = `<strong>Arquivo:</strong> ${file.name}<br><strong>Tipo:</strong> ${file.type || 'desconhecido'}<br><strong>Tamanho:</strong> ${tamanhoMB.toFixed(2)} MB`;
 }
 
 function atualizarListaWA() {
@@ -1665,16 +1779,15 @@ function atualizarListaWA() {
 
 async function importarLeads() {
   const leads = await GET('/leads');
-  const elegiveis = leads.filter(l => l.telefone && Number(l.whatsapp_opt_in) === 1 && Number(l.whatsapp_opt_out || 0) === 0);
-  const bloqueados = leads.filter(l => l.telefone && !(Number(l.whatsapp_opt_in) === 1 && Number(l.whatsapp_opt_out || 0) === 0));
-  window._waContatos = [...(window._waContatos||[]), ...elegiveis.map(l=>({nome:l.nome,telefone:l.telefone}))];
+  const comTel = leads.filter(l=>l.telefone);
+  window._waContatos = [...(window._waContatos||[]), ...comTel.map(l=>({nome:l.nome,telefone:l.telefone}))];
   // Deduplicar
   const unique = [];
   const seen = new Set();
   window._waContatos.forEach(c => { if(!seen.has(c.telefone)) { seen.add(c.telefone); unique.push(c); } });
   window._waContatos = unique;
   atualizarListaWA();
-  alert(`✅ ${elegiveis.length} leads elegíveis importados!${bloqueados.length ? `\n⚠️ ${bloqueados.length} leads ignorados por falta de opt-in ou por opt-out.` : ''}`);
+  alert(`✅ ${comTel.length} leads importados!`);
 }
 
 function adicionarManual() {
@@ -1717,53 +1830,109 @@ function importarCSV() {
 async function criarCampanha() {
   const nome = document.getElementById('wa-nome').value.trim();
   const msg = document.getElementById('wa-msg').value.trim();
-  const mediaInput = document.getElementById('wa-media-file');
-  const mediaCaption = document.getElementById('wa-media-caption')?.value || '';
-
-  if(!nome) return alert('Nome da campanha é obrigatório!');
-  if(!msg && !mediaInput?.files?.length) return alert('Informe uma mensagem ou selecione uma mídia!');
+  if(!nome || !msg) return alert('Nome e mensagem são obrigatórios!');
   if(!window._waContatos?.length) return alert('Adicione ao menos um contato!');
+ async function criarCampanha() {
 
-  const btn = document.querySelector('#modal-container .modal-footer .btn-primary');
-  if(btn) {
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Salvando...';
+  const nome =
+    document.getElementById('wa-nome').value.trim();
+
+  const msg =
+    document.getElementById('wa-msg').value.trim();
+
+  if (!nome || !msg) {
+    return alert(
+      'Nome e mensagem são obrigatórios!'
+    );
   }
 
+  if (!window._waContatos?.length) {
+    return alert(
+      'Adicione ao menos um contato!'
+    );
+  }
+
+  const caption =
+    document.getElementById('wa-media-caption')?.value || '';
+
+  if (waMidia.path) {
+    waMidia.caption = caption;
+  }
+
+  const dadosCampanha = {
+    nome_campanha: nome,
+    mensagem: msg,
+    contatos: window._waContatos,
+    intervalo_segundos:
+      parseInt(
+        document.getElementById('wa-intervalo').value
+      ) || 5,
+
+    media_path: waMidia.path,
+    media_name: waMidia.name,
+    media_type: waMidia.type,
+    media_mimetype: waMidia.mimetype,
+    media_caption: waMidia.caption
+  };
+
+  console.log(
+    '=== DADOS DA CAMPANHA ===',
+    dadosCampanha
+  );
+
   try {
-    let media = null;
 
-    if(mediaInput?.files?.length) {
-      media = await uploadWhatsappMedia(mediaInput.files[0], mediaCaption);
-    }
+    const r = await POST(
+      '/whatsapp/campanhas',
+      dadosCampanha
+    );
 
-    const r = await POST('/whatsapp/campanhas', {
-      nome_campanha: nome,
-      mensagem: msg,
-      contatos: window._waContatos,
-      intervalo_segundos: parseInt(document.getElementById('wa-intervalo').value)||5,
-      media_path: media?.media_path || null,
-      media_name: media?.media_name || null,
-      media_type: media?.media_type || null,
-      media_mimetype: media?.media_mimetype || null,
-      media_caption: media?.media_caption || null
-    });
-
-    if(!r.success) {
-      throw new Error(r.error || 'Erro ao criar campanha');
+    if (!r.success) {
+      return alert(
+        `❌ Erro ao criar campanha:\n\n${r.error || 'Erro desconhecido'}`
+      );
     }
 
     closeModal();
+
+    window._waContatos = [];
+
+    waMidia = {
+      path: null,
+      name: null,
+      type: null,
+      mimetype: null,
+      caption: null,
+      size: 0
+    };
+
+    await renderWhatsapp();
+
+    alert(
+      `✅ Campanha criada com sucesso!\n\n` +
+      `ID: ${r.id}\n` +
+      `Status: ${r.status || 'Rascunho'}\n` +
+      `Contatos: ${dadosCampanha.contatos.length}\n` +
+      `Mídia: ${dadosCampanha.media_name || 'Nenhuma'}\n\n` +
+      `A campanha permanece em Rascunho.`
+    );
+
+  } catch (error) {
+
+    console.error(
+      'Erro ao criar campanha:',
+      error
+    );
+
+    alert(
+      `❌ Erro ao criar campanha:\n\n${error.message}`
+    );
+  }
+}
+  if(r.success) {
+    closeModal();
     renderWhatsapp();
-    alert(`✅ Campanha criada com ${window._waContatos.length} contatos!\n${media ? '📎 Mídia anexada: ' + media.media_name + '\n' : ''}Acesse a campanha para iniciar o envio.`);
-  } catch(err) {
-    console.error('Erro ao criar campanha:', err);
-    alert(`❌ Não foi possível criar a campanha.\n\n${err.message || err}`);
-  } finally {
-    if(btn) {
-      btn.disabled = false;
-      btn.innerHTML = '<i class="fas fa-save"></i> Salvar Campanha';
-    }
+    alert(`✅ Campanha criada com ${window._waContatos.length} contatos!\nAcesse a campanha para iniciar o envio.`);
   }
 }
 
@@ -1794,8 +1963,7 @@ async function verCampanha(id) {
         <span>Status: <strong>${c.status}</strong></span><span>${perc}%</span>
       </div>
     </div>
-    <div style="margin-top:16px;font-size:13px;background:var(--bg2);padding:12px;border-radius:10px;border:1px solid var(--border);max-height:80px;overflow:hidden;color:var(--text2)">${c.mensagem||'Sem texto'}</div>
-    ${c.media_name ? `<div style="margin-top:10px;font-size:12px;background:rgba(37,211,102,0.08);padding:10px;border-radius:9px;border:1px solid rgba(37,211,102,0.25);color:var(--text2)"><i class="fas fa-paperclip" style="color:#25d366"></i> Mídia: <strong>${c.media_name}</strong>${c.media_caption ? `<br><span style="color:var(--text3)">Legenda: ${c.media_caption}</span>` : ''}</div>` : ''}
+    <div style="margin-top:16px;font-size:13px;background:var(--bg2);padding:12px;border-radius:10px;border:1px solid var(--border);max-height:80px;overflow:hidden;color:var(--text2)">${c.mensagem}</div>
     <div class="wa-phone-list" style="margin-top:12px;max-height:300px" id="wa-contatos-list">
       ${contatos.map(ct=>`
         <div class="wa-phone-item">

@@ -1,4 +1,3 @@
-import os
 import sqlite3
 import threading
 import uuid
@@ -7,7 +6,7 @@ from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-DB_PATH = Path(os.getenv("SAFE_QUEUE_DB", str(BASE_DIR / "database" / "crm.db")))
+DB_PATH = BASE_DIR / "database" / "crm.db"
 
 _lock = threading.RLock()
 
