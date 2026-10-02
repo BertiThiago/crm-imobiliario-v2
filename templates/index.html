@@ -868,11 +868,54 @@ function tipoIcone(tipo) {
 }
 
 async function registrarOptinWhatsApp(id) {
-  const origem = prompt('Como o opt-in foi obtido? Ex.: ligação, presencial, formulário, cliente respondeu no WhatsApp:', 'ligação');
+  const origem = prompt(
+    'Como o opt-in foi obtido? Ex.: ligação, presencial, formulário, cliente respondeu no WhatsApp:',
+    'ligação'
+  );
+
   if(!origem) return;
-  const r = await POST(`/leads/${id}/whatsapp-optin`, {opt_in:true, source:origem});
-  if(!r.success) return alert(`❌ ${r.error || 'Não foi possível registrar o opt-in.'}`);
+
+  const r = await PUT(
+    `/leads/${id}/whatsapp-optin`,
+    {
+      opt_in: true,
+      source: origem
+    }
+  );
+
+  if(!r.success) {
+    return alert(
+      `❌ ${r.error || 'Não foi possível registrar o opt-in.'}`
+    );
+  }
+
   alert('✅ Opt-in registrado com sucesso.');
+  abrirLead(id);
+}
+
+
+async function registrarOptoutWhatsApp(id) {
+  if(!confirm(
+    'Registrar OPT-OUT para este lead? O sistema bloqueará novos disparos.'
+  )) {
+    return;
+  }
+
+  const r = await PUT(
+    `/leads/${id}/whatsapp-optin`,
+    {
+      opt_in: false,
+      source: 'manual_optout'
+    }
+  );
+
+  if(!r.success) {
+    return alert(
+      `❌ ${r.error || 'Não foi possível registrar o opt-out.'}`
+    );
+  }
+
+  alert('✅ Opt-out registrado.');
   abrirLead(id);
 }
 
