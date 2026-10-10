@@ -89,7 +89,10 @@ def _check_response(response):
     except ValueError:
         data = {}
     if isinstance(data, dict):
-        text = str(data).lower()
+        # Não varrer o eco da mensagem enviada ("message"/"key"): o texto da campanha
+        # (ex.: "Massapê", "terms") disparava falso positivo e parava todos os envios.
+        scan = {k: v for k, v in data.items() if k not in ("message", "key", "messageTimestamp")}
+        text = str(scan).lower()
         signals = ("restricted", "restriction", "blocked", "spam", "terms", "massa", "mass", "automated", "automation")
         if any(s in text for s in signals):
             _interrupted = True

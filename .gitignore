@@ -12,3 +12,7 @@ build/
 .DS_Store
 *.db
 *.sqlite
+*-backup
+*.backup
+*-BACKUP*
+*.py-backup

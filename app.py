@@ -27,7 +27,7 @@ from whatsapp.safe_queue import (
 )
 
 app = Flask(__name__)
-app.secret_key = 'crm_imobiliario_secret_2024'
+app.secret_key = os.getenv('CRM_SECRET_KEY', 'crm_imobiliario_secret_2024')
 CORS(app)
 
 # ─────────────────────────────────────────────
@@ -2490,5 +2490,4 @@ if __name__ == '__main__':
     init_db()
     print("\n🏠 CRM Imobiliário iniciado!")
     print("📌 Acesse: http://localhost:5000")
-    print("👤 Login: admin@crm.com | Senha: admin123\n")
-    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
+    app.run(debug=os.getenv('CRM_DEBUG', '0') == '1', host='0.0.0.0', port=5000, use_reloader=False)
