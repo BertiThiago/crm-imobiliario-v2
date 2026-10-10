@@ -9,6 +9,10 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parents[1]
 DB_PATH = Path(os.getenv("SAFE_QUEUE_DB", str(BASE_DIR / "database" / "crm.db")))
 
+# Atraso aleatório entre envios (usado pelo worker_safe).
+MIN_DELAY_SECONDS = float(os.getenv("SAFE_MIN_DELAY_SECONDS", "8"))
+MAX_DELAY_SECONDS = float(os.getenv("SAFE_MAX_DELAY_SECONDS", "20"))
+
 _lock = threading.RLock()
 
 
