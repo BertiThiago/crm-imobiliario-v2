@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import functools
 import threading
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -16,10 +17,44 @@ MAX_DELAY_SECONDS = float(os.getenv("SAFE_MAX_DELAY_SECONDS", "20"))
 _lock = threading.RLock()
 
 
+_tracked = threading.local()
+
+
 def connect():
     c = sqlite3.connect(str(DB_PATH), timeout=30)
     c.row_factory = sqlite3.Row
+    conns = getattr(_tracked, "conns", None)
+    if conns is not None:
+        conns.append(c)
     return c
+
+
+def _release_on_error(fn):
+    """Se a função falhar no meio, desfaz e fecha as conexões que ela abriu.
+    Sem isso, uma exceção deixava a transação aberta (journal pendurado) e o
+    processo passava a travar o próprio banco ("database is locked")."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        anterior = getattr(_tracked, "conns", None)
+        _tracked.conns = []
+        try:
+            return fn(*args, **kwargs)
+        except BaseException:
+            for c in _tracked.conns:
+                try:
+                    c.rollback()
+                except Exception:
+                    pass
+                try:
+                    c.close()
+                except Exception:
+                    pass
+            raise
+        finally:
+            _tracked.conns = anterior
+
+    return wrapper
 
 
 def now():
@@ -42,6 +77,7 @@ def _ensure_column(c, table, column, definition):
         )
 
 
+@_release_on_error
 def init_db():
     with _lock:
         c = connect()
@@ -145,6 +181,7 @@ def event(c, phone, typ, detail=""):
     )
 
 
+@_release_on_error
 def expire_inactive():
     """
     Encerra automaticamente conversas de serviço que ultrapassaram
@@ -205,6 +242,7 @@ def expire_inactive():
         c.close()
 
 
+@_release_on_error
 def upsert_contact(
     phone,
     name="",
@@ -335,6 +373,7 @@ def upsert_contact(
         return result
 
 
+@_release_on_error
 def register_incoming(phone, name="", detail=""):
     """
     Registra uma mensagem recebida e abre/renova a conversa de serviço.
@@ -397,6 +436,7 @@ def register_incoming(phone, name="", detail=""):
         c.close()
 
 
+@_release_on_error
 def enqueue(
     phone,
     message,
@@ -565,6 +605,7 @@ def enqueue(
         }
 
 
+@_release_on_error
 def claim_next():
     """
     Retira da fila o próximo item elegível.
@@ -709,6 +750,7 @@ def claim_next():
         return dict(r)
 
 
+@_release_on_error
 def mark_pending(queue_id, evolution_message_id):
     with _lock:
         c = connect()
@@ -769,6 +811,7 @@ def mark_pending(queue_id, evolution_message_id):
         c.close()
 
 
+@_release_on_error
 def mark_failed(queue_id, error):
     with _lock:
         c = connect()
@@ -809,6 +852,7 @@ def mark_failed(queue_id, error):
         c.close()
 
 
+@_release_on_error
 def update_message_status(evolution_message_id, status):
     """
     Atualiza o status de entrega/leitura recebido da Evolution API.
@@ -910,6 +954,7 @@ def update_message_status(evolution_message_id, status):
         return True
 
 
+@_release_on_error
 def list_queue(limit=100):
     c = connect()
 
@@ -930,6 +975,7 @@ def list_queue(limit=100):
     return result
 
 
+@_release_on_error
 def dashboard():
     c = connect()
 
