@@ -139,6 +139,31 @@ def init_db():
             """
         )
 
+        # Bancos antigos (criados por versoes anteriores) tinham events(id INTEGER, event_type).
+        # Migra preservando o historico; a tabela antiga fica guardada como events_legacy.
+        _event_cols = {row[1] for row in c.execute("PRAGMA table_info(events)").fetchall()}
+        if "type" not in _event_cols and "event_type" in _event_cols:
+            c.execute("ALTER TABLE events RENAME TO events_legacy")
+            c.execute(
+                """
+                CREATE TABLE events(
+                    id TEXT PRIMARY KEY,
+                    phone TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    detail TEXT DEFAULT '',
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            c.execute(
+                """
+                INSERT INTO events(id, phone, type, detail, created_at)
+                SELECT 'legacy-' || CAST(id AS TEXT), COALESCE(phone, ''),
+                       event_type, COALESCE(detail, ''), created_at
+                FROM events_legacy
+                """
+            )
+
         # Existing databases may predate some of these columns.
         _ensure_column(c, "contacts", "opt_in_source", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(c, "contacts", "opt_in_at", "TEXT")
