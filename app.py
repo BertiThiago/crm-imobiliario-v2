@@ -24,6 +24,7 @@ from whatsapp.safe_queue import (
     list_queue as safe_queue_list,
     enqueue as safe_enqueue,
     update_message_status,
+    connect as safe_queue_connect,
 )
 
 app = Flask(__name__)
@@ -391,6 +392,17 @@ def init_db():
             c.execute(
                 f"ALTER TABLE mensagens_whatsapp ADD COLUMN {column} {definition}"
             )
+
+    contato_columns = {
+        row["name"]
+        for row in c.execute(
+            "PRAGMA table_info(contatos_whatsapp)"
+        ).fetchall()
+    }
+    if "queue_id" not in contato_columns:
+        c.execute(
+            "ALTER TABLE contatos_whatsapp ADD COLUMN queue_id TEXT"
+        )
 
     MEDIA_ROOT.mkdir(
         parents=True,
@@ -1111,6 +1123,8 @@ def campanhas_whatsapp():
 
         if request.method == 'GET':
 
+            _sincronizar_seguro(conn)
+
             rows = conn.execute(
                 """
                 SELECT *
@@ -1779,11 +1793,13 @@ def iniciar_campanha(id):
                     UPDATE contatos_whatsapp
                     SET
                         status=?,
-                        erro_msg=NULL
+                        erro_msg=NULL,
+                        queue_id=?
                     WHERE id=?
                     """,
                     (
                         'Enfileirado',
+                        resultado.get('queue_id'),
                         contato['id']
                     )
                 )
@@ -1859,6 +1875,97 @@ def iniciar_campanha(id):
         conn.close()
 
 
+def _sincronizar_status_campanhas(conn, campanha_id=None):
+    """Reflete no CRM o que a Safe Queue ja fez (enviado, entregue, erro, bloqueio).
+    Sem isso o contato ficava para sempre como 'Enfileirado'.
+    Simulacoes (DRY-RUN) nao contam como envio."""
+    sql = (
+        "SELECT id, campanha_id, queue_id FROM contatos_whatsapp "
+        "WHERE status IN ('Enfileirado', 'Enviado') AND queue_id IS NOT NULL"
+    )
+    params = ()
+    if campanha_id is not None:
+        sql += " AND campanha_id=?"
+        params = (campanha_id,)
+    abertos = conn.execute(sql, params).fetchall()
+    if not abertos:
+        return 0
+
+    ids = [a["queue_id"] for a in abertos]
+    fila_conn = safe_queue_connect()
+    try:
+        marcas = ",".join("?" * len(ids))
+        fila = {
+            r["id"]: r
+            for r in fila_conn.execute(
+                "SELECT id, status, delivery_status, error, reason, sent_at, "
+                "evolution_message_id FROM queue WHERE id IN (" + marcas + ")",
+                ids,
+            ).fetchall()
+        }
+    finally:
+        fila_conn.close()
+
+    alterados = 0
+    campanhas = set()
+    for a in abertos:
+        q = fila.get(a["queue_id"])
+        if not q:
+            continue
+        erro = None
+        enviado_em = None
+        if q["status"] == "sent":
+            if str(q["evolution_message_id"] or "").startswith("DRY-RUN"):
+                continue
+            entregue = str(q["delivery_status"] or "").upper() in (
+                "DELIVERY_ACK", "DELIVERED", "READ", "PLAYED"
+            )
+            novo = "Entregue" if entregue else "Enviado"
+            enviado_em = q["sent_at"]
+        elif q["status"] == "failed":
+            novo, erro = "Erro", q["error"]
+        elif q["status"] == "blocked":
+            novo, erro = "Bloqueado", q["reason"]
+        else:
+            continue
+        cur = conn.execute(
+            "UPDATE contatos_whatsapp SET status=?, erro_msg=?, "
+            "enviado_em=COALESCE(enviado_em, ?) WHERE id=? AND status<>?",
+            (novo, erro, enviado_em, a["id"], novo),
+        )
+        if cur.rowcount:
+            alterados += 1
+            campanhas.add(a["campanha_id"])
+
+    for cid in campanhas:
+        t = conn.execute(
+            "SELECT "
+            "COALESCE(SUM(status IN ('Enviado','Entregue')), 0) AS env, "
+            "COALESCE(SUM(status IN ('Erro','Bloqueado')), 0) AS err, "
+            "COALESCE(SUM(status IN ('Enfileirado','Pendente')), 0) AS aberto "
+            "FROM contatos_whatsapp WHERE campanha_id=?",
+            (cid,),
+        ).fetchone()
+        conn.execute(
+            "UPDATE mensagens_whatsapp SET enviados=?, erros=?, "
+            "status=CASE WHEN ?=0 THEN 'Concluido' ELSE status END, "
+            "concluido_em=CASE WHEN ?=0 THEN COALESCE(concluido_em, CURRENT_TIMESTAMP) "
+            "ELSE concluido_em END WHERE id=?",
+            (t["env"], t["err"], t["aberto"], t["aberto"], cid),
+        )
+    conn.commit()
+    return alterados
+
+
+def _sincronizar_seguro(conn, campanha_id=None):
+    """Nunca derruba a tela: se a fila estiver indisponivel, so avisa no log."""
+    try:
+        return _sincronizar_status_campanhas(conn, campanha_id)
+    except Exception as exc:
+        print("Aviso: falha ao sincronizar status com a Safe Queue:", exc)
+        return 0
+
+
 @app.route(
     '/api/whatsapp/campanhas/<int:id>',
     methods=['GET']
@@ -1869,6 +1976,8 @@ def campanha_status(id):
     conn = get_db()
 
     try:
+
+        _sincronizar_seguro(conn, id)
 
         camp = conn.execute(
             """
@@ -2336,6 +2445,12 @@ def whatsapp_webhook():
                 evolution_message_id,
                 status
             )
+
+            _conn_sync = get_db()
+            try:
+                _sincronizar_seguro(_conn_sync)
+            finally:
+                _conn_sync.close()
 
             return jsonify({
                 "ok": True,
