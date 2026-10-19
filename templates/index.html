@@ -790,7 +790,11 @@ async function abrirLead(id) {
           <select id="el-empr"><option value="">-- Nenhum --</option>${optsE}</select>
         </div>
         <div class="form-group"><label>Origem</label>
-          <select id="el-origem"><option ${l.origem=='Direto'?'selected':''}>Direto</option><option ${l.origem=='Instagram'?'selected':''}>Instagram</option><option ${l.origem=='Facebook'?'selected':''}>Facebook</option><option ${l.origem=='Google'?'selected':''}>Google</option><option ${l.origem=='Indicação'?'selected':''}>Indicação</option><option ${l.origem=='QuintoAndar'?'selected':''}>QuintoAndar</option><option ${l.origem=='ZAP Imóveis'?'selected':''}>ZAP Imóveis</option><option ${l.origem=='Viva Real'?'selected':''}>Viva Real</option></select>
+          <select id="el-origem"><option ${l.origem=='Direto'?
+          'selected':''}>Direto</option><option ${l.origem=='Oferta Ativa'?  
+          'selected':''}>Oferta</option><option ${l.origem=='Lead'?
+          'selected':''}>Lead</option><option ${l.origem=='Lista'?
+          'selected':''}>Lista</option><option ${l.origem=='Instagram'?'selected':''}>Instagram</option><option ${l.origem=='Facebook'?'selected':''}>Facebook</option><option ${l.origem=='Google'?'selected':''}>Google</option><option ${l.origem=='Indicação'?'selected':''}>Indicação</option><option ${l.origem=='QuintoAndar'?'selected':''}>QuintoAndar</option><option ${l.origem=='ZAP Imóveis'?'selected':''}>ZAP Imóveis</option><option ${l.origem=='Viva Real'?'selected':''}>Viva Real</option></select>
         </div>
         <div class="form-group"><label>Temperatura</label>
           <select id="el-temp"><option ${l.temperatura=='Frio'?'selected':''}>Frio</option><option ${l.temperatura=='Morno'?'selected':''}>Morno</option><option ${l.temperatura=='Quente'?'selected':''}>Quente</option></select>
