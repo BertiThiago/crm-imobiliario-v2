@@ -1735,31 +1735,175 @@ function adicionarManual() {
   }
 }
 
-function importarCSV() {
+// ── Importação de contatos/leads por CSV (com opt-in) ─────────────────────────
+// Colunas aceitas: nome, telefone (ou numero/celular/whatsapp), email, opt_in, opt_out,
+// origem_consentimento, data_consentimento. Sem cabeçalho: coluna A = nome, B = número.
+const _ALIAS_CSV = {
+  nome: ['nome','name','cliente','contato'],
+  telefone: ['telefone','numero','celular','whatsapp','fone','tel','phone'],
+  email: ['email','e-mail'],
+  opt_in: ['optin','opt-in','opt_in','consentimento','autorizawhatsapp','aceitawhatsapp','whatsappoptin','autorizacao'],
+  opt_out: ['optout','opt-out','opt_out','descadastrado','naoreceber'],
+  origem_consentimento: ['origemconsentimento','origemoptin','origemdoconsentimento','fonteconsentimento','origem'],
+  data_consentimento: ['dataconsentimento','dataoptin','datadoconsentimento']
+};
+const _normCab = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');
+const _escCSV = s => String(s ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+
+function parseCSVTexto(texto) {
+  texto = String(texto||'').replace(/^\uFEFF/, '');
+  const primeira = texto.split(/\r?\n/, 1)[0] || '';
+  const cont = {';': (primeira.match(/;/g)||[]).length, ',': (primeira.match(/,/g)||[]).length, '\t': (primeira.match(/\t/g)||[]).length};
+  const delim = Object.keys(cont).sort((a,b)=>cont[b]-cont[a])[0];
+  const linhas = [];
+  let atual = [], campo = '', aspas = false;
+  const fecharLinha = () => { atual.push(campo.trim()); campo = ''; if(atual.some(c=>c!=='')) linhas.push(atual); atual = []; };
+  for(let i=0;i<texto.length;i++) {
+    const ch = texto[i];
+    if(aspas) {
+      if(ch === '"') { if(texto[i+1] === '"') { campo += '"'; i++; } else aspas = false; }
+      else campo += ch;
+    } else if(ch === '"') aspas = true;
+    else if(ch === delim) { atual.push(campo.trim()); campo = ''; }
+    else if(ch === '\n' || ch === '\r') { if(ch === '\r' && texto[i+1] === '\n') i++; fecharLinha(); }
+    else campo += ch;
+  }
+  if(campo !== '' || atual.length) fecharLinha();
+  return linhas;
+}
+
+function lerCSVContatos(texto) {
+  const linhas = parseCSVTexto(texto);
+  if(!linhas.length) return {erro: 'O arquivo está vazio.'};
+  const cab = linhas[0].map(_normCab);
+  const col = {};
+  Object.entries(_ALIAS_CSV).forEach(([campo, aliases]) => {
+    const alvo = aliases.map(_normCab);
+    const i = cab.findIndex(c => alvo.includes(c));
+    if(i >= 0) col[campo] = i;
+  });
+  let inicio = 1;
+  if(col.telefone === undefined) {
+    // sem cabeçalho reconhecido: coluna A = nome, B = número (se a 2ª coluna parece telefone)
+    const seg = (linhas[0][1] || '').replace(/\D/g,'');
+    if(linhas[0].length >= 2 && seg.length >= 10) { col.nome = 0; col.telefone = 1; inicio = 0; }
+    else return {erro: 'Não encontrei a coluna do telefone. Use um cabeçalho como "Numero", "Telefone", "Celular" ou "WhatsApp".'};
+  }
+  const dados = [];
+  for(let i=inicio;i<linhas.length;i++) {
+    const row = linhas[i], o = {linha: i + 1};
+    Object.keys(col).forEach(campo => { o[campo] = row[col[campo]] ?? ''; });
+    dados.push(o);
+  }
+  return {linhas: dados, colunas: Object.keys(col), semCabecalho: inicio === 0};
+}
+
+function importarCSV() { abrirImportacaoLeadsCSV(true); }
+
+function abrirImportacaoLeadsCSV(paraCampanha) {
   const input = document.createElement('input');
-  input.type='file'; input.accept='.csv,.txt';
+  input.type = 'file'; input.accept = '.csv,.txt';
   input.onchange = e => {
     const file = e.target.files[0];
-    const reader = new FileReader();
-    reader.onload = ev => {
-      const lines = ev.target.result.split('\n');
-      window._waContatos = window._waContatos||[];
-      let added=0;
-      lines.forEach(line => {
-        const parts = line.split(',').map(p=>p.trim().replace(/["']/g,''));
-        if(parts.length>=1 && parts[parts.length-1].replace(/\D/g,'').length>=10) {
-          const tel = parts[parts.length-1];
-          const nome = parts.length>1 ? parts[0] : '';
-          window._waContatos.push({nome, telefone:tel});
-          added++;
-        }
-      });
-      atualizarListaWA();
-      alert(`✅ ${added} contatos importados do CSV!`);
+    if(!file) return;
+    const processar = texto => {
+      const lido = lerCSVContatos(texto);
+      if(lido.erro) { alert(lido.erro); return; }
+      window._impCSV = {linhas: lido.linhas, colunas: lido.colunas, semCabecalho: lido.semCabecalho, arquivo: file.name, paraCampanha: !!paraCampanha, concluida: false};
+      mostrarDialogoImportCSV();
     };
-    reader.readAsText(file);
+    const leitor = new FileReader();
+    leitor.onload = ev => {
+      let texto = ev.target.result;
+      if(texto.includes('\uFFFD')) {            // CSV do Excel em Windows-1252
+        const l2 = new FileReader();
+        l2.onload = e2 => processar(e2.target.result);
+        l2.readAsText(file, 'windows-1252');
+      } else processar(texto);
+    };
+    leitor.readAsText(file, 'UTF-8');
   };
   input.click();
+}
+
+function fecharDialogoImportCSV() { document.getElementById('imp-csv-overlay')?.remove(); }
+
+function mostrarDialogoImportCSV() {
+  fecharDialogoImportCSV();
+  const d = window._impCSV;
+  const temOptin = d.colunas.includes('opt_in');
+  const rotulos = {nome:'Nome', telefone:'Telefone', email:'E-mail', opt_in:'Opt-in', opt_out:'Opt-out', origem_consentimento:'Origem do consentimento', data_consentimento:'Data do consentimento'};
+  const ov = document.createElement('div');
+  ov.id = 'imp-csv-overlay'; ov.className = 'modal-overlay'; ov.style.zIndex = 2000;
+  ov.innerHTML = `
+    <div class="modal modal-lg fade-in">
+      <div class="modal-header"><h2>Importar contatos do CSV</h2><button class="modal-close" onclick="fecharDialogoImportCSV()">×</button></div>
+      <div class="modal-body">
+        <p style="font-size:13px;color:var(--text2);margin-bottom:10px"><strong>${_escCSV(d.arquivo)}</strong> — ${d.linhas.length} linha(s).
+          Colunas: ${d.colunas.map(c=>_escCSV(rotulos[c]||c)).join(', ')}${d.semCabecalho ? ' (sem cabeçalho: A = nome, B = número)' : ''}.</p>
+        <p style="font-size:12px;color:var(--text3);margin-bottom:14px">Leads que ainda não existem serão cadastrados; nome e e-mail dos já existentes são atualizados. Opt-out nunca é revertido por CSV.</p>
+        <div class="form-group form-full"><label>Origem do consentimento (padrão do arquivo)</label>
+          <input id="imp-origem" placeholder="Ex.: Formulário do site, 09/2026"></div>
+        ${temOptin
+          ? `<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:10px 0"><input type="checkbox" id="imp-optin-padrao"> <span>Tratar linhas com a coluna de opt-in <strong>vazia</strong> como autorizadas</span></label>`
+          : `<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:10px 0"><input type="checkbox" id="imp-optin-padrao"> <span>Este arquivo <strong>não tem coluna de opt-in</strong>. Marque se <strong>todos</strong> os contatos autorizaram contato por WhatsApp. Sem marcar, os leads são cadastrados <strong>sem</strong> opt-in e não poderão receber campanha.</span></label>`}
+        <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:10px 0"><input type="checkbox" id="imp-confirmo"> <span>Confirmo que tenho base legal e registro do consentimento dos contatos marcados como opt-in.</span></label>
+        <div id="imp-csv-relatorio" style="margin-top:12px;font-size:13px"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="fecharDialogoImportCSV()">Fechar</button>
+        <button class="btn btn-secondary" id="imp-btn-sim" onclick="executarImportCSV(true)">Simular</button>
+        <button class="btn btn-primary" id="imp-btn-go" onclick="executarImportCSV(false)">${d.paraCampanha ? 'Importar e adicionar à campanha' : 'Importar'}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+}
+
+async function executarImportCSV(simular) {
+  const d = window._impCSV;
+  if(!d || d.concluida) return;
+  const rel = document.getElementById('imp-csv-relatorio');
+  const corpo = {
+    linhas: d.linhas, fonte: d.arquivo, simular: !!simular,
+    origem_padrao: document.getElementById('imp-origem').value.trim(),
+    opt_in_padrao: document.getElementById('imp-optin-padrao').checked,
+    confirmo_base_legal: document.getElementById('imp-confirmo').checked
+  };
+  rel.textContent = 'Processando...';
+  let r;
+  try { r = await POST('/importar/leads', corpo); }
+  catch(err) { rel.textContent = 'Falha de comunicação com o servidor.'; return; }
+  if(!r || !r.success) { rel.innerHTML = `<span style="color:var(--red)">${_escCSV((r && r.error) || 'Não foi possível importar.')}</span>`; return; }
+  const linhasRel = [
+    [r.simulado ? 'SIMULAÇÃO (nada foi gravado)' : 'Importação concluída', ''],
+    ['Linhas lidas / telefones únicos', `${r.total_linhas} / ${r.telefones_unicos}`],
+    ['Leads novos cadastrados', r.criados],
+    ['Leads existentes atualizados (nome/e-mail)', r.leads_atualizados],
+    ['Opt-in registrados', r.optin_registrados],
+    ['Já tinham opt-in', r.ja_tinham_optin],
+    ['Opt-in ignorado (lead com opt-out)', r.optin_ignorado_por_optout],
+    ['Opt-out registrados', r.optout_registrados],
+    ['Elegíveis para campanha / não elegíveis', `${r.elegiveis} / ${r.nao_elegiveis}`],
+    ['Linhas com erro', r.erros_total]
+  ];
+  let html = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px">${linhasRel.map(([k,v])=>`<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0"><span>${_escCSV(k)}</span><strong>${_escCSV(v)}</strong></div>`).join('')}</div>`;
+  if(r.erros && r.erros.length) html += `<div style="margin-top:8px;color:var(--red);font-size:12px">${r.erros.slice(0,10).map(e=>`Linha ${_escCSV(e.linha)}: ${_escCSV(e.motivo)}`).join('<br>')}${r.erros_total>10?'<br>…':''}</div>`;
+  if(r.avisos && r.avisos.length) html += `<div style="margin-top:8px;color:var(--text3);font-size:12px">${r.avisos.slice(0,5).map(e=>`Linha ${_escCSV(e.linha)}: ${_escCSV(e.motivo)}`).join('<br>')}</div>`;
+  if(!r.simulado && d.paraCampanha) {
+    window._waContatos = window._waContatos || [];
+    const vistos = new Set(window._waContatos.map(c => String(c.telefone).replace(/\D/g,'')));
+    let add = 0;
+    (r.contatos_elegiveis || []).forEach(c => { const k = String(c.telefone).replace(/\D/g,''); if(!vistos.has(k)) { vistos.add(k); window._waContatos.push({nome: c.nome, telefone: c.telefone}); add++; } });
+    if(typeof atualizarListaWA === 'function' && document.getElementById('wa-lista')) atualizarListaWA();
+    html += `<div style="margin-top:8px;color:var(--green);font-size:13px">${add} contato(s) elegível(is) adicionado(s) à campanha.${r.nao_elegiveis ? ` ${r.nao_elegiveis} ficaram de fora por falta de opt-in.` : ''}</div>`;
+  }
+  rel.innerHTML = html;
+  if(!r.simulado) {
+    d.concluida = true;
+    const go = document.getElementById('imp-btn-go'), sim = document.getElementById('imp-btn-sim');
+    if(go) go.disabled = true;
+    if(sim) sim.disabled = true;
+  }
 }
 
 async function criarCampanha() {
@@ -2086,6 +2230,11 @@ async function renderImportar() {
 
   document.getElementById('topbar-actions').innerHTML = '';
   document.getElementById('content').innerHTML = `
+    <div class="card" style="margin-bottom:24px">
+      <div class="card-title"><i class="fas fa-users" style="color:var(--green)"></i> Importar Leads / Contatos (CSV com opt-in)</div>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:12px">Cadastra leads novos e atualiza nome e e-mail dos existentes. Colunas: <code>nome</code>, <code>telefone</code> (ou <code>numero</code>), <code>email</code>, <code>opt_in</code>, <code>opt_out</code>, <code>origem_consentimento</code>, <code>data_consentimento</code>. Sem cabeçalho: A = nome, B = número.</p>
+      <button class="btn btn-primary" onclick="abrirImportacaoLeadsCSV(false)"><i class="fas fa-file-csv"></i> Escolher CSV de contatos</button>
+    </div>
     <div class="grid-2" style="margin-bottom:24px">
 
       <!-- Importar Empreendimentos (Book) -->

@@ -2434,6 +2434,249 @@ def importar_empreendimentos():
     conn.commit(); conn.close()
     return jsonify({'success': True, 'importados': ok, 'erros': erros, 'log': log})
 
+import re as _re
+import unicodedata as _unicodedata
+
+_OPT_SIM = {'sim', 's', 'yes', 'y', 'true', '1', 'x', 'ok', 'autorizado', 'autorizou',
+            'aceito', 'aceitou', 'consentiu', 'optin', 'opt-in', 'opt_in'}
+_OPT_NAO = {'nao', 'n', 'no', 'false', '0', 'negado', 'recusou', 'recusado'}
+_OPT_SAIR = {'optout', 'opt-out', 'opt_out', 'descadastrado', 'descadastrar',
+             'bloqueado', 'remover', 'parar', 'stop', 'cancelar'}
+_PRIORIDADE_DECISAO = {'sem_info': 0, 'nao': 1, 'optin': 2, 'optout': 3}
+
+
+def _token_texto(valor):
+    texto = _unicodedata.normalize('NFKD', str(valor or '')).encode('ascii', 'ignore').decode()
+    return texto.strip().lower()
+
+
+def _normalizar_telefone_br(valor):
+    """Devolve o telefone no formato 55 + DDD + numero, ou None se invalido."""
+    d = _re.sub(r'\D', '', str(valor or ''))
+    if len(d) in (10, 11):
+        d = '55' + d
+    if len(d) not in (12, 13) or not d.startswith('55'):
+        return None
+    if int(d[2:4]) < 11:
+        return None
+    return d
+
+
+def _parse_data_consentimento(valor):
+    texto = str(valor or '').strip()
+    for formato in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%d/%m/%Y %H:%M:%S',
+                    '%d/%m/%Y %H:%M', '%d/%m/%Y'):
+        try:
+            dt = datetime.strptime(texto, formato)
+        except ValueError:
+            continue
+        if dt > datetime.now():
+            return None
+        return dt.strftime('%Y-%m-%d %H:%M:%S')
+    return None
+
+
+def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
+                        confirmo_base_legal, fonte, usuario_id):
+    """Cria/atualiza leads a partir de linhas de CSV, com registro de opt-in.
+
+    Regras: opt-in so vale quando explicito (ou quando o usuario marcou o padrao do arquivo);
+    opt-out sempre vence; opt-out existente nunca e revertido por CSV; origem do consentimento
+    e obrigatoria para registrar opt-in. Com simular=True nada e gravado."""
+    erros, avisos = [], []
+    por_tel = {}
+    for posicao, row in enumerate(linhas, start=1):
+        if not isinstance(row, dict):
+            continue
+        linha = row.get('linha') or posicao
+        tel = _normalizar_telefone_br(row.get('telefone'))
+        if not tel:
+            erros.append({'linha': linha, 'motivo': 'telefone invalido ou vazio'})
+            continue
+        t_in = _token_texto(row.get('opt_in'))
+        t_out = _token_texto(row.get('opt_out'))
+        if t_out in _OPT_SIM or t_out in _OPT_SAIR or t_in in _OPT_SAIR:
+            decisao = 'optout'
+        elif t_in in _OPT_SIM:
+            decisao = 'optin'
+        elif t_in in _OPT_NAO:
+            decisao = 'nao'
+        elif t_in == '':
+            decisao = 'optin' if opt_in_padrao else 'sem_info'
+        else:
+            decisao = 'sem_info'
+            avisos.append({'linha': linha, 'motivo': 'valor de opt-in nao reconhecido; tratado como sem opt-in'})
+        if t_out not in ('',) and t_out not in _OPT_SIM and t_out not in _OPT_SAIR and t_out not in _OPT_NAO:
+            avisos.append({'linha': linha, 'motivo': 'valor de opt-out nao reconhecido; ignorado'})
+        email = str(row.get('email') or '').strip().lower()
+        if email and '@' not in email:
+            avisos.append({'linha': linha, 'motivo': 'e-mail invalido; ignorado'})
+            email = ''
+        entry = por_tel.setdefault(tel, {
+            'nome': '', 'email': '', 'decisao': 'sem_info', 'origem': '',
+            'data': None, 'linhas': [], 'conflito': False,
+        })
+        entry['linhas'].append(linha)
+        if str(row.get('nome') or '').strip():
+            entry['nome'] = str(row['nome']).strip()[:200]
+        if email:
+            entry['email'] = email[:200]
+        if {entry['decisao'], decisao} >= {'optin', 'optout'}:
+            entry['conflito'] = True
+        if _PRIORIDADE_DECISAO[decisao] > _PRIORIDADE_DECISAO[entry['decisao']]:
+            entry['decisao'] = decisao
+            if decisao == 'optin':
+                entry['origem'] = (str(row.get('origem_consentimento') or '').strip() or origem_padrao)[:200]
+                entry['data'] = _parse_data_consentimento(row.get('data_consentimento'))
+        elif decisao == 'optin' and entry['decisao'] == 'optin' and not entry['origem']:
+            entry['origem'] = (str(row.get('origem_consentimento') or '').strip() or origem_padrao)[:200]
+            entry['data'] = entry['data'] or _parse_data_consentimento(row.get('data_consentimento'))
+
+    # opt-in sem origem do consentimento nao e importado
+    for tel in list(por_tel):
+        e = por_tel[tel]
+        if e['decisao'] == 'optin' and not e['origem']:
+            for linha in e['linhas']:
+                erros.append({'linha': linha, 'motivo': 'opt-in sem origem do consentimento (informe a origem padrao)'})
+            del por_tel[tel]
+
+    tem_optin = any(e['decisao'] == 'optin' for e in por_tel.values())
+    if tem_optin and not simular and not confirmo_base_legal:
+        raise ValueError('Confirme que voce possui base legal para os contatos marcados como opt-in.')
+
+    existentes = {}
+    for lead in conn.execute(
+        "SELECT id, nome, email, telefone, whatsapp_opt_in, whatsapp_opt_out "
+        "FROM leads WHERE telefone IS NOT NULL AND telefone<>''"
+    ).fetchall():
+        chave = _normalizar_telefone_br(lead['telefone'])
+        if chave:
+            existentes.setdefault(chave, []).append(dict(lead))
+
+    r = {'criados': 0, 'leads_atualizados': 0, 'optin_registrados': 0, 'ja_tinham_optin': 0,
+         'optin_ignorado_por_optout': 0, 'optout_registrados': 0, 'sem_alteracao_de_consentimento': 0,
+         'conflitos_resolvidos_para_optout': 0}
+    elegiveis, nao_elegiveis = [], 0
+    agora = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    for tel, e in por_tel.items():
+        origem_txt = f"CSV ({fonte}): {e['origem']}" if fonte else f"CSV: {e['origem']}"
+        if e['conflito']:
+            r['conflitos_resolvidos_para_optout'] += 1
+        leads_do_tel = existentes.get(tel)
+        if leads_do_tel:
+            todos_elegiveis = True
+            nome_final = e['nome'] or leads_do_tel[-1]['nome']
+            for lead in leads_do_tel:
+                sets, params = [], []
+                if e['nome'] and e['nome'] != lead['nome']:
+                    sets.append('nome=?'); params.append(e['nome'])
+                if e['email'] and e['email'] != (lead['email'] or ''):
+                    sets.append('email=?'); params.append(e['email'])
+                if sets:
+                    r['leads_atualizados'] += 1
+                opt_in, opt_out = int(lead['whatsapp_opt_in'] or 0), int(lead['whatsapp_opt_out'] or 0)
+                if e['decisao'] == 'optout':
+                    if not (opt_out == 1 and opt_in == 0):
+                        sets += ['whatsapp_opt_in=0', "whatsapp_opt_in_source=''", 'whatsapp_opt_in_at=NULL', 'whatsapp_opt_out=1']
+                        r['optout_registrados'] += 1
+                    opt_in, opt_out = 0, 1
+                elif e['decisao'] == 'optin':
+                    if opt_out == 1:
+                        r['optin_ignorado_por_optout'] += 1
+                    elif opt_in == 1:
+                        r['ja_tinham_optin'] += 1
+                    else:
+                        sets += ['whatsapp_opt_in=1', 'whatsapp_opt_in_source=?', 'whatsapp_opt_in_at=?', 'whatsapp_opt_out=0']
+                        params += [origem_txt, e['data'] or agora]
+                        r['optin_registrados'] += 1
+                        opt_in = 1
+                else:
+                    r['sem_alteracao_de_consentimento'] += 1
+                if not (opt_in == 1 and opt_out == 0):
+                    todos_elegiveis = False
+                if sets and not simular:
+                    conn.execute(
+                        'UPDATE leads SET ' + ', '.join(sets) + ', atualizado_em=CURRENT_TIMESTAMP WHERE id=?',
+                        params + [lead['id']],
+                    )
+            if todos_elegiveis:
+                elegiveis.append({'nome': nome_final, 'telefone': tel})
+            else:
+                nao_elegiveis += 1
+        else:
+            r['criados'] += 1
+            opt_in = 1 if e['decisao'] == 'optin' else 0
+            opt_out = 1 if e['decisao'] == 'optout' else 0
+            if opt_in:
+                r['optin_registrados'] += 1
+            if opt_out:
+                r['optout_registrados'] += 1
+            if not simular:
+                conn.execute(
+                    '''INSERT INTO leads
+                       (nome, telefone, email, origem, tipo_interesse, status, temperatura, responsavel_id,
+                        whatsapp_opt_in, whatsapp_opt_in_source, whatsapp_opt_in_at, whatsapp_opt_out)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+                    (e['nome'] or f'Contato {tel[-4:]}', tel, e['email'], 'Importação CSV', 'Lancamento',
+                     'Novo', 'Frio', usuario_id, opt_in, origem_txt if opt_in else '',
+                     (e['data'] or agora) if opt_in else None, opt_out),
+                )
+            if opt_in and not opt_out:
+                elegiveis.append({'nome': e['nome'] or f'Contato {tel[-4:]}', 'telefone': tel})
+            else:
+                nao_elegiveis += 1
+
+    duplicadas = sum(len(e['linhas']) - 1 for e in por_tel.values())
+    relatorio = {
+        'success': True, 'simulado': bool(simular), 'total_linhas': len(linhas),
+        'telefones_unicos': len(por_tel), 'duplicadas_no_arquivo': duplicadas,
+        **r, 'elegiveis': len(elegiveis), 'nao_elegiveis': nao_elegiveis,
+        'erros_total': len(erros), 'erros': erros[:50], 'avisos_total': len(avisos), 'avisos': avisos[:50],
+        'contatos_elegiveis': elegiveis,
+    }
+    if not simular:
+        conn.execute(
+            '''INSERT INTO importacoes (tipo, arquivo_nome, total_registros, importados, erros, log_detalhado)
+               VALUES (?,?,?,?,?,?)''',
+            ('leads_csv', fonte or 'csv', len(linhas), r['criados'] + r['leads_atualizados'], len(erros),
+             json.dumps({k: v for k, v in relatorio.items() if k not in ('contatos_elegiveis', 'erros', 'avisos')}
+                        | {'erros': erros[:200]}, ensure_ascii=False)),
+        )
+        conn.commit()
+    return relatorio
+
+
+@app.route('/api/importar/leads', methods=['POST'])
+@login_required
+def importar_leads_csv():
+    data = request.get_json(silent=True) or {}
+    linhas = data.get('linhas')
+    if not isinstance(linhas, list) or not linhas:
+        return jsonify({'success': False, 'error': 'Nenhuma linha para importar.'}), 400
+    if len(linhas) > 20000:
+        return jsonify({'success': False, 'error': 'Limite de 20.000 linhas por importação.'}), 400
+    conn = get_db()
+    try:
+        relatorio = _importar_leads_csv(
+            conn, linhas,
+            origem_padrao=str(data.get('origem_padrao') or '').strip(),
+            opt_in_padrao=bool(data.get('opt_in_padrao')),
+            simular=bool(data.get('simular')),
+            confirmo_base_legal=bool(data.get('confirmo_base_legal')),
+            fonte=str(data.get('fonte') or '').strip()[:120],
+            usuario_id=session.get('user_id'),
+        )
+        return jsonify(relatorio)
+    except ValueError as exc:
+        conn.rollback()
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 @app.route('/api/importacoes', methods=['GET'])
 @login_required
 def historico_importacoes():
