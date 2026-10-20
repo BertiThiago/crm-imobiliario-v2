@@ -13,6 +13,7 @@ from .safe_queue import (
     claim_next,
     mark_failed,
     mark_pending,
+    recover_stuck,
     MIN_DELAY_SECONDS,
     MAX_DELAY_SECONDS,
 )
@@ -82,6 +83,18 @@ def run():
     print(f"DRY_RUN={DRY_RUN}")
     print(f"DELAY={MIN_DELAY_SECONDS}-{MAX_DELAY_SECONDS}s")
     print("=" * 70)
+
+    # Itens que ficaram em 'processing' de uma execucao anterior (worker caiu) voltam para a fila.
+    # SAFE_RECOVER_ACTION=fail marca como falha em vez de reenviar (evita duplicidade).
+    try:
+        r = recover_stuck(
+            older_than_minutes=float(os.getenv("SAFE_RECOVER_MINUTES", "5")),
+            action=os.getenv("SAFE_RECOVER_ACTION", "requeue"),
+        )
+        if r["afetados"]:
+            print(f"[RECOVER] {r['afetados']} item(ns) preso(s): {r['action']}")
+    except Exception as exc:
+        print(f"[RECOVER] falhou: {exc}")
 
     while True:
         processed = process_once()

@@ -25,6 +25,8 @@ from whatsapp.safe_queue import (
     enqueue as safe_enqueue,
     update_message_status,
     connect as safe_queue_connect,
+    recover_stuck,
+    cancel_pending,
 )
 
 app = Flask(__name__)
@@ -1964,6 +1966,133 @@ def _sincronizar_seguro(conn, campanha_id=None):
     except Exception as exc:
         print("Aviso: falha ao sincronizar status com a Safe Queue:", exc)
         return 0
+
+
+def _status_da_fila(queue_ids):
+    """Status atual de cada item da Safe Queue: {queue_id: status}."""
+    ids = [q for q in queue_ids if q]
+    if not ids:
+        return {}
+    fila_conn = safe_queue_connect()
+    try:
+        marcas = ",".join("?" * len(ids))
+        return {
+            r["id"]: r["status"]
+            for r in fila_conn.execute(
+                "SELECT id, status FROM queue WHERE id IN (" + marcas + ")", ids
+            ).fetchall()
+        }
+    finally:
+        fila_conn.close()
+
+
+@app.route('/api/whatsapp/safe/recuperar', methods=['POST'])
+@login_required
+def recuperar_itens_presos():
+    """Trata itens presos em 'processing' (worker caiu). acao: 'requeue' ou 'fail'."""
+    data = request.get_json(silent=True) or {}
+    acao = str(data.get('acao', 'requeue'))
+    if acao not in ('requeue', 'fail'):
+        return jsonify({'success': False, 'error': "acao deve ser 'requeue' ou 'fail'"}), 400
+    try:
+        minutos = float(data.get('minutos', 10))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'minutos invalido'}), 400
+    resultado = recover_stuck(older_than_minutes=minutos, action=acao)
+    return jsonify({'success': True, **resultado})
+
+
+@app.route('/api/whatsapp/campanhas/<int:id>', methods=['DELETE'])
+@login_required
+def excluir_campanha(id):
+    """Exclui a campanha e seus contatos. Itens ainda pendentes na fila sao cancelados;
+    o historico de envios ja feitos permanece na Safe Queue (auditoria)."""
+    conn = get_db()
+    try:
+        camp = conn.execute(
+            "SELECT id, status FROM mensagens_whatsapp WHERE id=?", (id,)
+        ).fetchone()
+        if not camp:
+            return jsonify({'success': False, 'error': 'Campanha não encontrada'}), 404
+        if camp['status'] == 'Enviando':
+            return jsonify({'success': False, 'error': 'Campanha em envio. Aguarde terminar.'}), 409
+        ids = [
+            r['queue_id']
+            for r in conn.execute(
+                "SELECT queue_id FROM contatos_whatsapp WHERE campanha_id=? AND queue_id IS NOT NULL",
+                (id,),
+            ).fetchall()
+        ]
+        if 'processing' in _status_da_fila(ids).values():
+            return jsonify({
+                'success': False,
+                'error': 'Há envio em andamento nesta campanha. Aguarde ou use a recuperação de itens presos.',
+            }), 409
+        fila = cancel_pending(ids)
+        removidos = conn.execute(
+            "DELETE FROM contatos_whatsapp WHERE campanha_id=?", (id,)
+        ).rowcount
+        conn.execute("DELETE FROM mensagens_whatsapp WHERE id=?", (id,))
+        conn.commit()
+        return jsonify({
+            'success': True,
+            'contatos_removidos': removidos,
+            'cancelados_na_fila': fila['cancelados'],
+            'mantidos_no_historico': fila['ja_processados'],
+        })
+    finally:
+        conn.close()
+
+
+@app.route('/api/whatsapp/campanhas/<int:id>/reprocessar', methods=['POST'])
+@login_required
+def reprocessar_campanha(id):
+    """Volta contatos com erro (e, se pedido, bloqueados) para 'Pendente' e reabre a campanha.
+    Depois basta iniciar a campanha de novo: opt-in e opt-out sao reavaliados."""
+    data = request.get_json(silent=True) or {}
+    status_alvo = ['Erro'] + (['Bloqueado'] if data.get('incluir_bloqueados') else [])
+    conn = get_db()
+    try:
+        camp = conn.execute(
+            "SELECT id, status FROM mensagens_whatsapp WHERE id=?", (id,)
+        ).fetchone()
+        if not camp:
+            return jsonify({'success': False, 'error': 'Campanha não encontrada'}), 404
+        if camp['status'] == 'Enviando':
+            return jsonify({'success': False, 'error': 'Campanha em envio.'}), 409
+        _sincronizar_seguro(conn, id)
+        abertos = [
+            r['queue_id']
+            for r in conn.execute(
+                "SELECT queue_id FROM contatos_whatsapp "
+                "WHERE campanha_id=? AND status='Enfileirado' AND queue_id IS NOT NULL",
+                (id,),
+            ).fetchall()
+        ]
+        if any(st in ('pending', 'processing') for st in _status_da_fila(abertos).values()):
+            return jsonify({
+                'success': False,
+                'error': 'Ainda há itens desta campanha na fila. Aguarde o worker ou recupere os itens presos.',
+            }), 409
+        marcas = ",".join("?" * len(status_alvo))
+        n = conn.execute(
+            "UPDATE contatos_whatsapp SET status='Pendente', erro_msg=NULL, queue_id=NULL "
+            "WHERE campanha_id=? AND status IN (" + marcas + ")",
+            [id] + status_alvo,
+        ).rowcount
+        if n:
+            restantes = conn.execute(
+                "SELECT COALESCE(SUM(status IN ('Erro','Bloqueado')), 0) FROM contatos_whatsapp WHERE campanha_id=?",
+                (id,),
+            ).fetchone()[0]
+            conn.execute(
+                "UPDATE mensagens_whatsapp SET status='Rascunho', erros=?, concluido_em=NULL WHERE id=?",
+                (restantes, id),
+            )
+        conn.commit()
+        return jsonify({'success': True, 'reprocessados': n, 'status_campanha': 'Rascunho' if n else camp['status']})
+    finally:
+        conn.close()
 
 
 @app.route(

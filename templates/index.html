@@ -1607,6 +1607,7 @@ async function renderWhatsapp() {
               <td style="display:flex;gap:6px">
                 ${c.status==='Rascunho' ? `<button class="btn btn-sm btn-success" onclick="iniciarCampanha(${c.id})"><i class="fas fa-play"></i> Iniciar</button>` : ''}
                 <button class="btn btn-sm btn-secondary btn-icon" onclick="verCampanha(${c.id})"><i class="fas fa-eye"></i></button>
+                <button class="btn btn-sm btn-secondary btn-icon" title="Excluir campanha" onclick="excluirCampanha(${c.id})"><i class="fas fa-trash"></i></button>
               </td>
             </tr>`).join('') || `<tr><td colspan="7"><div class="empty-state"><i class="fab fa-whatsapp"></i><p>Nenhuma campanha criada</p></div></td></tr>`}
         </tbody>
@@ -1824,6 +1825,32 @@ async function iniciarCampanha(id) {
   }
 }
 
+async function excluirCampanha(id) {
+  if(!confirm('Excluir esta campanha e seus contatos? Envios ainda pendentes na fila serão cancelados.')) return;
+  const r = await DEL(`/whatsapp/campanhas/${id}`);
+  if(r && r.success) {
+    alert(`Campanha excluída. Envios pendentes cancelados na fila: ${r.cancelados_na_fila}.`);
+    renderWhatsapp();
+  } else {
+    alert((r && r.error) || 'Não foi possível excluir a campanha.');
+  }
+}
+
+async function reprocessarCampanha(id, incluirBloqueados) {
+  const msg = incluirBloqueados
+    ? 'Reprocessar contatos com erro e bloqueados? Opt-in e opt-out serão verificados de novo ao iniciar.'
+    : 'Reprocessar os contatos com erro?';
+  if(!confirm(msg)) return;
+  const r = await POST(`/whatsapp/campanhas/${id}/reprocessar`, {incluir_bloqueados: !!incluirBloqueados});
+  if(r && r.success) {
+    closeModal();
+    renderWhatsapp();
+    alert(r.reprocessados ? `${r.reprocessados} contato(s) voltaram para Pendente. Clique em Iniciar para enviar.` : 'Nenhum contato para reprocessar.');
+  } else {
+    alert((r && r.error) || 'Não foi possível reprocessar.');
+  }
+}
+
 async function verCampanha(id) {
   const d = await GET(`/whatsapp/campanhas/${id}`);
   const c = d.campanha;
@@ -1846,13 +1873,15 @@ async function verCampanha(id) {
     <div class="wa-phone-list" style="margin-top:12px;max-height:300px" id="wa-contatos-list">
       ${contatos.map(ct=>`
         <div class="wa-phone-item">
-          <div class="wa-status ${ct.status.toLowerCase()==='enviado'?'sent':ct.status.toLowerCase()==='erro'?'error':'pending'}"></div>
+          <div class="wa-status ${['enviado','entregue'].includes(ct.status.toLowerCase())?'sent':['erro','bloqueado'].includes(ct.status.toLowerCase())?'error':'pending'}"></div>
           <div style="flex:1"><div style="font-size:13px">${ct.nome||ct.telefone}</div><div style="font-size:11px;color:var(--text2)">${ct.telefone}</div></div>
           <span style="font-size:11px;color:var(--text3)">${ct.status}</span>
         </div>`).join('')}
     </div>
-    ${c.status==='Enviando' ? `<div style="text-align:center;margin-top:12px;color:var(--accent);font-size:13px"><i class="fas fa-circle-notch fa-spin"></i> Enviando em background... <button class="btn btn-sm btn-secondary" onclick="verCampanha(${id})" style="margin-left:8px">↻ Atualizar</button></div>` : ''}`,
-    `<button class="btn btn-secondary" onclick="closeModal()">Fechar</button>`, 'modal-lg');
+    ${['Enviando','Enfileirada'].includes(c.status) ? `<div style="text-align:center;margin-top:12px;color:var(--accent);font-size:13px"><i class="fas fa-circle-notch fa-spin"></i> Enviando em background... <button class="btn btn-sm btn-secondary" onclick="verCampanha(${id})" style="margin-left:8px">↻ Atualizar</button></div>` : ''}`,
+    `${contatos.some(ct=>ct.status==='Erro') ? `<button class="btn btn-secondary" onclick="reprocessarCampanha(${id}, false)"><i class="fas fa-redo"></i> Reprocessar erros</button>` : ''}
+     ${contatos.some(ct=>ct.status==='Bloqueado') ? `<button class="btn btn-secondary" onclick="reprocessarCampanha(${id}, true)"><i class="fas fa-redo"></i> Reprocessar erros e bloqueados</button>` : ''}
+     <button class="btn btn-secondary" onclick="closeModal()">Fechar</button>`, 'modal-lg');
 }
 
 // ══════════════════════════════════════════════

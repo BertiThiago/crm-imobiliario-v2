@@ -1001,6 +1001,81 @@ def list_queue(limit=100):
 
 
 @_release_on_error
+def recover_stuck(older_than_minutes=10, action="requeue"):
+    """Trata itens presos em 'processing' (ex.: o worker caiu no meio do envio).
+
+    action="requeue": volta o item para 'pending' (sera enviado de novo).
+        Atencao: se a queda ocorreu logo depois de a Evolution aceitar a mensagem,
+        ela pode ser enviada duas vezes. So itens SEM evolution_message_id sao tocados.
+    action="fail": marca como 'failed' (interrompido) para decisao manual.
+    """
+    if action not in ("requeue", "fail"):
+        raise ValueError("action deve ser 'requeue' ou 'fail'")
+    limite = iso(now() - timedelta(minutes=float(older_than_minutes)))
+    with _lock:
+        c = connect()
+        rows = c.execute(
+            """
+            SELECT id, phone
+            FROM queue
+            WHERE status='processing'
+              AND (evolution_message_id IS NULL OR evolution_message_id='')
+              AND COALESCE(started_at, created_at) <= ?
+            """,
+            (limite,),
+        ).fetchall()
+        for r in rows:
+            if action == "requeue":
+                c.execute(
+                    "UPDATE queue SET status='pending', started_at=NULL, "
+                    "reason='reprocessado apos interrupcao' WHERE id=?",
+                    (r["id"],),
+                )
+                event(c, r["phone"], "requeued", "Item preso em processing voltou para a fila")
+            else:
+                c.execute(
+                    "UPDATE queue SET status='failed', "
+                    "error='Interrompido: worker parou durante o envio' WHERE id=?",
+                    (r["id"],),
+                )
+                event(c, r["phone"], "failed", "Interrompido: worker parou durante o envio")
+        c.commit()
+        c.close()
+    return {"action": action, "afetados": len(rows), "ids": [r["id"] for r in rows]}
+
+
+@_release_on_error
+def cancel_pending(queue_ids):
+    """Cancela itens ainda 'pending'. Itens em 'processing' ou ja enviados nao sao alterados."""
+    ids = [q for q in (queue_ids or []) if q]
+    if not ids:
+        return {"cancelados": 0, "em_processamento": 0, "ja_processados": 0}
+    with _lock:
+        c = connect()
+        marcas = ",".join("?" * len(ids))
+        rows = c.execute(
+            "SELECT id, phone, status FROM queue WHERE id IN (" + marcas + ")",
+            ids,
+        ).fetchall()
+        cancelados = 0
+        for r in rows:
+            if r["status"] == "pending":
+                c.execute(
+                    "UPDATE queue SET status='cancelled', reason='campanha excluida' WHERE id=?",
+                    (r["id"],),
+                )
+                event(c, r["phone"], "cancelled", "Campanha excluida antes do envio")
+                cancelados += 1
+        c.commit()
+        c.close()
+    return {
+        "cancelados": cancelados,
+        "em_processamento": sum(1 for r in rows if r["status"] == "processing"),
+        "ja_processados": sum(1 for r in rows if r["status"] in ("sent", "failed", "blocked", "cancelled")),
+    }
+
+
+@_release_on_error
 def dashboard():
     c = connect()
 
@@ -1012,6 +1087,7 @@ def dashboard():
         "sent",
         "failed",
         "blocked",
+        "cancelled",
     ):
         row = c.execute(
             """
