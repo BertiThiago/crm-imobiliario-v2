@@ -14,6 +14,7 @@ from .safe_queue import (
     mark_failed,
     mark_pending,
     recover_stuck,
+    peek_next_group,
     MIN_DELAY_SECONDS,
     MAX_DELAY_SECONDS,
 )
@@ -31,7 +32,12 @@ def _message_id(response):
     return response.get("messageId")
 
 
+_ULTIMO_GRUPO = None
+
+
 def process_once():
+    global _ULTIMO_GRUPO
+    _ULTIMO_GRUPO = None
     item = claim_next()
     if not item:
         return False
@@ -49,6 +55,7 @@ def process_once():
         if DRY_RUN:
             print(f"[DRY-RUN] {phone} | mode={item.get('send_mode')} | {message[:100]}")
             mark_pending(qid, f"DRY-RUN-{qid}")
+            _ULTIMO_GRUPO = item.get("group_key")
             return True
 
         if media_path:
@@ -69,6 +76,7 @@ def process_once():
 
         mark_pending(qid, message_id)
         print(f"[PENDING] {phone} | queue={qid} | messageId={message_id}")
+        _ULTIMO_GRUPO = item.get("group_key")
         return True
 
     except Exception as exc:
@@ -99,7 +107,20 @@ def run():
     while True:
         processed = process_once()
         if processed:
-            delay = random.uniform(MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
+            # midias/mensagens do MESMO contato saem em sequencia, com intervalo curto
+            mesmo_contato = False
+            if _ULTIMO_GRUPO:
+                try:
+                    mesmo_contato = peek_next_group() == _ULTIMO_GRUPO
+                except Exception:
+                    mesmo_contato = False
+            if mesmo_contato:
+                delay = random.uniform(
+                    float(os.getenv("SAFE_GROUP_MIN_DELAY_SECONDS", "2")),
+                    float(os.getenv("SAFE_GROUP_MAX_DELAY_SECONDS", "5")),
+                )
+            else:
+                delay = random.uniform(MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
             print(f"[WAIT] {delay:.1f}s")
             time.sleep(delay)
         else:

@@ -179,6 +179,7 @@ def init_db():
         _ensure_column(c, "queue", "media_type", "TEXT")
         _ensure_column(c, "queue", "media_mimetype", "TEXT")
         _ensure_column(c, "queue", "media_caption", "TEXT")
+        _ensure_column(c, "queue", "group_key", "TEXT")
 
         c.commit()
         c.close()
@@ -472,6 +473,7 @@ def enqueue(
     media_type=None,
     media_mimetype=None,
     media_caption=None,
+    group_key=None,
 ):
     """
     Coloca uma mensagem na fila somente se as regras de segurança
@@ -593,9 +595,10 @@ def enqueue(
                 media_type,
                 media_mimetype,
                 media_caption,
+                group_key,
                 created_at
             )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 q,
@@ -609,6 +612,7 @@ def enqueue(
                 media_type,
                 media_mimetype,
                 media_caption,
+                group_key,
                 iso(now()),
             ),
         )
@@ -628,6 +632,19 @@ def enqueue(
             "queue_id": q,
             "send_mode": send_mode,
         }
+
+
+@_release_on_error
+def peek_next_group():
+    """group_key do proximo item pendente (ou None). Usado pelo worker para
+    enviar as midias de um mesmo contato em sequencia, com intervalo curto."""
+    with _lock:
+        c = connect()
+        r = c.execute(
+            "SELECT group_key FROM queue WHERE status='pending' ORDER BY created_at LIMIT 1"
+        ).fetchone()
+        c.close()
+    return r["group_key"] if r else None
 
 
 @_release_on_error
