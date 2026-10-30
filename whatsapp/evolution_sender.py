@@ -101,10 +101,12 @@ def _check_response(response):
     return data
 
 
-def _post(endpoint: str, payload: dict):
+def _post(endpoint: str, payload: dict, timeout=None, midia=False):
     try:
-        return _check_response(requests.post(endpoint, json=payload, headers=headers(os.getenv("EVOLUTION_KEY", "")), timeout=_timeout()))
+        return _check_response(requests.post(endpoint, json=payload, headers=headers(os.getenv("EVOLUTION_KEY", "")), timeout=timeout or _timeout()))
     except requests.exceptions.Timeout as exc:
+        if midia:
+            raise RuntimeError("Timeout ao enviar a mídia. O envio pode ter sido concluído: confira no WhatsApp antes de reenviar.") from exc
         raise RuntimeError("Timeout na comunicação com a Evolution API.") from exc
     except requests.exceptions.ConnectionError as exc:
         raise RuntimeError("Não foi possível conectar à Evolution API.") from exc
@@ -142,4 +144,6 @@ def send_media(phone: str, media_path: str, media_type: str = "", mimetype: str 
         file_name = path.name
     data64 = base64.b64encode(path.read_bytes()).decode("ascii")
     payload = {"number": phone, "mediatype": media_type, "mimetype": mimetype, "caption": caption or "", "media": data64, "fileName": file_name}
-    return _post(f"{url}/message/sendMedia/{instance}", payload)
+    # vídeos grandes precisam de mais tempo: 60 s + 3 s por MB (mínimo = EVOLUTION_TIMEOUT)
+    tamanho_mb = path.stat().st_size / (1024 * 1024)
+    return _post(f"{url}/message/sendMedia/{instance}", payload, timeout=max(_timeout(), int(60 + tamanho_mb * 3)), midia=True)

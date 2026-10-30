@@ -527,10 +527,26 @@ function closeModal() {
 // ══════════════════════════════════════════════
 const fmt = v => v ? `R$ ${Number(v).toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:0})}` : '—';
 const fmtDate = d => d ? new Date(d+'T00:00:00').toLocaleDateString('pt-BR') : '—';
+window._statusLeads = [
+  {nome:'Novo',cor:'#3b82f6'},{nome:'Contato',cor:'#e8a020'},{nome:'Visita',cor:'#a855f7'},{nome:'Proposta',cor:'#f5c842'},
+  {nome:'Contrato',cor:'#4ade80'},{nome:'Fechado',cor:'#22c55e'},{nome:'Perdido',cor:'#ef4444'}
+];
+async function carregarStatusLeads(forcar) {
+  if(window._statusLeadsCarregado && !forcar) return window._statusLeads;
+  try {
+    const lista = await GET('/status-leads');
+    if(Array.isArray(lista) && lista.length) { window._statusLeads = lista; window._statusLeadsCarregado = true; }
+  } catch(e) { /* mantém a lista padrão */ }
+  return window._statusLeads;
+}
+const _classeStatus = {Novo:'novo',Contato:'contato',Visita:'visita',Proposta:'proposta',Contrato:'contrato',Fechado:'fechado',Perdido:'perdido'};
 const statusBadge = s => {
-  const m = {Novo:'novo',Contato:'contato',Visita:'visita',Proposta:'proposta',Contrato:'contrato',Fechado:'fechado',Perdido:'perdido'};
-  return `<span class="badge badge-${m[s]||'novo'}">${s}</span>`;
+  if(_classeStatus[s]) return `<span class="badge badge-${_classeStatus[s]}">${s}</span>`;
+  let cor = ((window._statusLeads || []).find(x => x.nome === s) || {}).cor || '#64748b';
+  if(!/^#[0-9a-f]{6}$/i.test(cor)) cor = '#64748b';
+  return `<span class="badge" style="background:${cor}33;color:${cor}">${_escCSV(s)}</span>`;
 };
+const opcoesStatus = sel => (window._statusLeads || []).map(s => `<option ${s.nome === sel ? 'selected' : ''}>${_escCSV(s.nome)}</option>`).join('');
 const tempBadge = t => `<span class="badge badge-${(t||'frio').toLowerCase()}"><span class="temp-dot ${(t||'frio').toLowerCase()}"></span>${t||'Frio'}</span>`;
 const tipoBadge = t => `<span class="badge badge-${t==='QuintoAndar'?'quintoandar':'lancamento'}">${t}</span>`;
 
@@ -557,7 +573,7 @@ async function renderDashboard() {
   const funil_html = d.funil.map((f,i) => `
     <div class="funil-bar">
       <div class="funil-label">${f.status}</div>
-      <div class="funil-track"><div class="funil-fill" style="width:${(f.total/max_funil)*100}%;background:${funil_cores[i]}">${f.total}</div></div>
+      <div class="funil-track"><div class="funil-fill" style="width:${(f.total/max_funil)*100}%;background:${f.cor || funil_cores[i % funil_cores.length]}">${f.total}</div></div>
       <div class="funil-total">${f.total}</div>
     </div>`).join('');
 
@@ -647,29 +663,42 @@ async function renderDashboard() {
 // LEADS
 // ══════════════════════════════════════════════
 let leadsData = [];
+// ── Leads: arquivar, consultar arquivados e desarquivar ───────────────────────────
+window._leadsArquivados = false;
+window._leadsSel = new Set();
+
 async function renderLeads(filtros={}) {
-  const params = new URLSearchParams(filtros).toString();
+  await carregarStatusLeads();
+  const arq = !!window._leadsArquivados;
+  const params = new URLSearchParams({...filtros, ...(arq ? {arquivados: 'sim'} : {})}).toString();
   leadsData = await GET('/leads' + (params ? '?'+params : ''));
+  window._leadsSel = new Set();
 
   document.getElementById('topbar-actions').innerHTML = `
     <div class="search-box"><i class="fas fa-search"></i><input id="lead-search" type="text" placeholder="Buscar lead..." style="width:220px" oninput="filtrarLeads()" /></div>
     <button class="btn btn-primary" onclick="modalNovoLead()"><i class="fas fa-plus"></i> Novo Lead</button>`;
 
   document.getElementById('content').innerHTML = `
+    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+      <button class="chip ${arq ? '' : 'active'}" id="tab-leads-ativos" onclick="alternarLeadsArquivados(false)">Leads ativos</button>
+      <button class="chip ${arq ? 'active' : ''}" id="tab-leads-arquivados" onclick="alternarLeadsArquivados(true)"><i class="fas fa-archive"></i> Arquivados</button>
+      <span id="leads-sel-bar" style="display:none;margin-left:auto;gap:8px;align-items:center">
+        <span id="leads-sel-count" style="font-size:12px;color:var(--text2)"></span>
+        <button class="btn btn-sm btn-secondary" id="btn-sel-acao" onclick="${arq ? 'desarquivarSelecionados()' : 'arquivarSelecionados()'}"><i class="fas fa-${arq ? 'box-open' : 'archive'}"></i> ${arq ? 'Desarquivar selecionados' : 'Arquivar selecionados'}</button>
+      </span>
+    </div>
+    ${arq ? `<div style="margin-bottom:12px;font-size:12px;color:var(--text3)">Leads arquivados ficam fora das listas, do funil e das campanhas, mas nada é apagado. Desarquive para voltar a trabalhar com eles.</div>` : ''}
     <div class="filter-chips" id="filter-chips">
       <span class="chip active" onclick="filtroLeads(this,'')">Todos (${leadsData.length})</span>
-      <span class="chip" onclick="filtroLeads(this,'Novo','status')">Novos</span>
-      <span class="chip" onclick="filtroLeads(this,'Contato','status')">Contato</span>
-      <span class="chip" onclick="filtroLeads(this,'Visita','status')">Visita</span>
-      <span class="chip" onclick="filtroLeads(this,'Proposta','status')">Proposta</span>
-      <span class="chip" onclick="filtroLeads(this,'Fechado','status')">Fechado</span>
-      <span class="chip" style="border-color:var(--blue);color:var(--blue)" onclick="filtroLeads(this,'Lancamento','tipo_interesse')">🏗 Lançamento</span>
-      <span class="chip" style="border-color:var(--green);color:var(--green)" onclick="filtroLeads(this,'QuintoAndar','tipo_interesse')">🟢 QuintoAndar</span>
+      ${(window._statusLeads || []).map(s => `<span class="chip" data-s="${_escCSV(s.nome)}" onclick="filtroLeads(this,this.dataset.s,'status')">${s.nome === 'Novo' ? 'Novos' : _escCSV(s.nome)}</span>`).join('')}
+      <span class="chip" style="border-color:var(--blue);color:var(--blue)" onclick="filtroLeads(this,'Lancamento','tipo_interesse')">🏢 Lançamento</span>
+      <span class="chip" style="border-color:var(--green);color:var(--green)" onclick="filtroLeads(this,'QuintoAndar','tipo_interesse')">🔑 QuintoAndar</span>
       <span class="chip" style="border-color:var(--red);color:var(--red)" onclick="filtroLeads(this,'Quente','temperatura')">🔥 Quente</span>
     </div>
     <div class="table-wrap">
       <table id="leads-table">
         <thead><tr>
+          <th style="width:32px"><input type="checkbox" id="leads-sel-todos" title="Selecionar todos" onchange="selecionarTodosLeads(this.checked)"></th>
           <th>Lead</th><th>Contato</th><th>Interesse</th><th>Temperatura</th>
           <th>Status</th><th>Origem</th><th>Data</th><th>Ações</th>
         </tr></thead>
@@ -679,24 +708,93 @@ async function renderLeads(filtros={}) {
 }
 
 function renderLeadsRows(leads) {
-  if(!leads.length) return `<tr><td colspan="8"><div class="empty-state"><i class="fas fa-user-slash"></i><p>Nenhum lead encontrado</p></div></td></tr>`;
+  const arq = !!window._leadsArquivados;
+  if(!leads.length) return `<tr><td colspan="9"><div class="empty-state"><i class="fas fa-${arq ? 'archive' : 'user-slash'}"></i><p>${arq ? 'Nenhum lead arquivado' : 'Nenhum lead encontrado'}</p></div></td></tr>`;
   return leads.map(l => `
     <tr>
-      <td><div style="font-weight:600;cursor:pointer;color:var(--accent)" onclick="abrirLead(${l.id})">${l.nome}</div>
-          <div style="font-size:11px;color:var(--text3)">${l.empreendimento||'—'}</div></td>
-      <td>${l.telefone||'—'}<br><span style="font-size:11px;color:var(--text3)">${l.email||''}</span></td>
+      <td><input type="checkbox" data-id="${l.id}" onchange="selecionarLead(${l.id}, this.checked)"></td>
+      <td><div style="font-weight:600;cursor:pointer;color:var(--accent)" onclick="abrirLead(${l.id})">${_escCSV(l.nome)}</div>
+          <div style="font-size:11px;color:var(--text3)">${_escCSV(l.empreendimento || '—')}</div>
+          ${Number(l.arquivado) === 1 ? `<div style="font-size:11px;color:var(--text3)"><i class="fas fa-archive"></i> Arquivado em ${fmtDate((l.arquivado_em || '').split(/[T ]/)[0])}${l.motivo_arquivamento ? ' · ' + _escCSV(l.motivo_arquivamento) : ''}</div>` : ''}</td>
+      <td>${_escCSV(l.telefone || '—')}<br><span style="font-size:11px;color:var(--text3)">${_escCSV(l.email || '')}</span></td>
       <td>${tipoBadge(l.tipo_interesse)}</td>
       <td>${tempBadge(l.temperatura)}</td>
       <td>${statusBadge(l.status)}</td>
-      <td style="color:var(--text2)">${l.origem||'—'}</td>
+      <td style="color:var(--text2)">${_escCSV(l.origem || '—')}</td>
       <td style="color:var(--text2)">${fmtDate(l.criado_em?.split('T')[0]||l.criado_em?.split(' ')[0])}</td>
       <td>
         <div style="display:flex;gap:6px">
           <button class="btn btn-sm btn-secondary btn-icon" onclick="abrirLead(${l.id})" title="Ver lead"><i class="fas fa-eye"></i></button>
-          <button class="btn btn-sm btn-secondary btn-icon" onclick="whatsappLead('${l.telefone}','${l.nome}')" title="WhatsApp"><i class="fab fa-whatsapp" style="color:#25d366"></i></button>
+          ${arq
+            ? `<button class="btn btn-sm btn-secondary btn-icon" onclick="desarquivarLead(${l.id})" title="Desarquivar"><i class="fas fa-box-open"></i></button>`
+            : `<button class="btn btn-sm btn-secondary btn-icon" data-tel="${_escCSV(l.telefone || '')}" data-nome="${_escCSV(l.nome)}" onclick="whatsappLead(this.dataset.tel,this.dataset.nome)" title="WhatsApp"><i class="fab fa-whatsapp" style="color:#25d366"></i></button>
+               <button class="btn btn-sm btn-secondary btn-icon" onclick="arquivarLead(${l.id})" title="Arquivar"><i class="fas fa-archive"></i></button>`}
         </div>
       </td>
     </tr>`).join('');
+}
+
+function alternarLeadsArquivados(ver) {
+  window._leadsArquivados = !!ver;
+  _filtroAtivo = {};
+  renderLeads();
+}
+
+function selecionarLead(id, marcado) {
+  if(marcado) window._leadsSel.add(id); else window._leadsSel.delete(id);
+  atualizarBarraLeads();
+}
+function selecionarTodosLeads(marcado) {
+  document.querySelectorAll('#leads-tbody input[data-id]').forEach(cb => {
+    cb.checked = marcado;
+    const id = Number(cb.dataset.id);
+    if(marcado) window._leadsSel.add(id); else window._leadsSel.delete(id);
+  });
+  atualizarBarraLeads();
+}
+function atualizarBarraLeads() {
+  const bar = document.getElementById('leads-sel-bar');
+  if(!bar) return;
+  const n = window._leadsSel.size;
+  bar.style.display = n ? 'flex' : 'none';
+  document.getElementById('leads-sel-count').textContent = `${n} selecionado(s)`;
+}
+
+async function _aposMudarArquivamento() {
+  if(document.getElementById('modal-container')) closeModal();
+  nav(currentPage || 'leads');
+}
+
+async function arquivarLead(id) {
+  const motivo = prompt('Motivo do arquivamento (opcional):', '');
+  if(motivo === null) return;
+  const r = await POST(`/leads/${id}/arquivar`, {motivo});
+  if(!r || !r.success) return alert((r && r.error) || 'Não foi possível arquivar o lead.');
+  _aposMudarArquivamento();
+}
+async function desarquivarLead(id) {
+  const r = await POST(`/leads/${id}/desarquivar`, {});
+  if(!r || !r.success) return alert((r && r.error) || 'Não foi possível desarquivar o lead.');
+  _aposMudarArquivamento();
+}
+async function arquivarSelecionados() {
+  const ids = [...window._leadsSel];
+  if(!ids.length) return;
+  const motivo = prompt(`Arquivar ${ids.length} lead(s). Motivo (opcional):`, '');
+  if(motivo === null) return;
+  const r = await POST('/leads/arquivar-lote', {ids, acao: 'arquivar', motivo});
+  if(!r || !r.success) return alert((r && r.error) || 'Não foi possível arquivar.');
+  alert(`${r.alterados} lead(s) arquivado(s).`);
+  renderLeads();
+}
+async function desarquivarSelecionados() {
+  const ids = [...window._leadsSel];
+  if(!ids.length) return;
+  if(!confirm(`Desarquivar ${ids.length} lead(s)?`)) return;
+  const r = await POST('/leads/arquivar-lote', {ids, acao: 'desarquivar'});
+  if(!r || !r.success) return alert((r && r.error) || 'Não foi possível desarquivar.');
+  alert(`${r.alterados} lead(s) desarquivado(s).`);
+  renderLeads();
 }
 
 let _filtroAtivo = {};
@@ -715,6 +813,7 @@ function filtrarLeads() {
 }
 
 async function modalNovoLead() {
+  await carregarStatusLeads();
   const emprs = await GET('/empreendimentos');
   const opts = emprs.map(e=>`<option value="${e.id}">${e.nome}</option>`).join('');
   modal('Novo Lead', `
@@ -736,7 +835,7 @@ async function modalNovoLead() {
         <select id="l-temp"><option>Frio</option><option>Morno</option><option>Quente</option></select>
       </div>
       <div class="form-group"><label>Status</label>
-        <select id="l-status"><option>Novo</option><option>Contato</option><option>Visita</option><option>Proposta</option><option>Contrato</option><option>Fechado</option><option>Perdido</option></select>
+        <select id="l-status">${opcoesStatus('Novo')}</select>
       </div>
       <div class="form-group"><label>Valor de Interesse</label><input id="l-valor" type="number" placeholder="500000"></div>
       <div class="form-group form-full"><label>Observações</label><textarea id="l-obs" placeholder="Detalhes sobre o lead..."></textarea></div>
@@ -765,12 +864,14 @@ async function salvarNovoLead() {
 }
 
 async function abrirLead(id) {
+  await carregarStatusLeads();
   const d = await GET(`/leads/${id}`);
   const l = d.lead;
   const emprs = await GET('/empreendimentos');
   const optsE = emprs.map(e=>`<option value="${e.id}" ${l.empreendimento_id==e.id?'selected':''}>${e.nome}</option>`).join('');
 
-  modal(`Lead: ${l.nome}`, `
+  modal(`Lead: ${_escCSV(l.nome)}`, `
+      ${Number(l.arquivado) === 1 ? `<div style="margin-bottom:12px;padding:10px 12px;border-radius:9px;background:rgba(100,116,139,.15);border:1px solid rgba(100,116,139,.35);font-size:12px;color:var(--text2)"><i class="fas fa-archive"></i> Lead <strong>arquivado</strong>${l.arquivado_em ? ' em ' + _escCSV(String(l.arquivado_em).split(/[T ]/)[0]) : ''}${l.motivo_arquivamento ? ' · ' + _escCSV(l.motivo_arquivamento) : ''}. Ele não aparece nas listas nem recebe campanhas.</div>` : ''}
     <div class="tabs">
       <button class="tab active" onclick="switchTab(this,'tab-info')">Informações</button>
       <button class="tab" onclick="switchTab(this,'tab-timeline')">Histórico (${d.interacoes.length})</button>
@@ -779,10 +880,10 @@ async function abrirLead(id) {
 
     <div id="tab-info">
       <div class="form-grid">
-        <div class="form-group"><label>Nome</label><input id="el-nome" value="${l.nome}"></div>
-        <div class="form-group"><label>Telefone</label><input id="el-tel" value="${l.telefone||''}"></div>
-        <div class="form-group"><label>Email</label><input id="el-email" value="${l.email||''}"></div>
-        <div class="form-group"><label>CPF</label><input id="el-cpf" value="${l.cpf||''}"></div>
+        <div class="form-group"><label>Nome</label><input id="el-nome" value="${_escCSV(l.nome)}"></div>
+        <div class="form-group"><label>Telefone</label><input id="el-tel" value="${_escCSV(l.telefone||'')}"></div>
+        <div class="form-group"><label>Email</label><input id="el-email" value="${_escCSV(l.email||'')}"></div>
+        <div class="form-group"><label>CPF</label><input id="el-cpf" value="${_escCSV(l.cpf||'')}"></div>
         <div class="form-group"><label>Tipo</label>
           <select id="el-tipo"><option ${l.tipo_interesse=='Lancamento'?'selected':''}>Lancamento</option><option ${l.tipo_interesse=='QuintoAndar'?'selected':''}>QuintoAndar</option><option ${l.tipo_interesse=='Revenda'?'selected':''}>Revenda</option></select>
         </div>
@@ -800,10 +901,10 @@ async function abrirLead(id) {
           <select id="el-temp"><option ${l.temperatura=='Frio'?'selected':''}>Frio</option><option ${l.temperatura=='Morno'?'selected':''}>Morno</option><option ${l.temperatura=='Quente'?'selected':''}>Quente</option></select>
         </div>
         <div class="form-group"><label>Status</label>
-          <select id="el-status"><option ${l.status=='Novo'?'selected':''}>Novo</option><option ${l.status=='Contato'?'selected':''}>Contato</option><option ${l.status=='Visita'?'selected':''}>Visita</option><option ${l.status=='Proposta'?'selected':''}>Proposta</option><option ${l.status=='Contrato'?'selected':''}>Contrato</option><option ${l.status=='Fechado'?'selected':''}>Fechado</option><option ${l.status=='Perdido'?'selected':''}>Perdido</option></select>
+          <select id="el-status">${opcoesStatus(l.status)}</select>
         </div>
         <div class="form-group"><label>Valor Interesse</label><input id="el-valor" type="number" value="${l.valor_interesse||''}"></div>
-        <div class="form-group form-full"><label>Observações</label><textarea id="el-obs">${l.observacoes||''}</textarea></div>
+        <div class="form-group form-full"><label>Observações</label><textarea id="el-obs">${_escCSV(l.observacoes||'')}</textarea></div>
       </div>
       <div class="card" style="margin-top:16px;padding:14px;border-color:${Number(l.whatsapp_opt_in)===1 && Number(l.whatsapp_opt_out||0)===0 ? 'rgba(34,197,94,.35)' : 'rgba(239,68,68,.35)'}">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
@@ -822,7 +923,10 @@ async function abrirLead(id) {
       </div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn btn-primary btn-sm" onclick="salvarLead(${id})"><i class="fas fa-save"></i> Salvar</button>
-        <button class="btn btn-success btn-sm" onclick="whatsappLead('${l.telefone}','${l.nome}')"><i class="fab fa-whatsapp"></i> WhatsApp</button>
+        <button class="btn btn-success btn-sm" data-tel="${_escCSV(l.telefone||'')}" data-nome="${_escCSV(l.nome)}" onclick="whatsappLead(this.dataset.tel,this.dataset.nome)"><i class="fab fa-whatsapp"></i> WhatsApp</button>
+        ${Number(l.arquivado) === 1
+          ? `<button class="btn btn-secondary btn-sm" onclick="desarquivarLead(${id})"><i class="fas fa-box-open"></i> Desarquivar</button>`
+          : `<button class="btn btn-secondary btn-sm" onclick="arquivarLead(${id})"><i class="fas fa-archive"></i> Arquivar</button>`}
         <button class="btn btn-secondary btn-sm" onclick="modalNegocio(${id})"><i class="fas fa-handshake"></i> Novo Negócio</button>
       </div>
     </div>
@@ -951,9 +1055,10 @@ async function salvarLead(id) {
 }
 
 async function registrarInteracao(leadId, tipo, dotClass) {
+  await carregarStatusLeads();
   const desc = prompt(`Descreva a ${tipo}:`);
   if(!desc) return;
-  const novoStatus = prompt('Novo status do lead? (deixe em branco para manter)\nOpções: Novo, Contato, Visita, Proposta, Contrato, Fechado, Perdido');
+  const novoStatus = prompt('Novo status do lead? (deixe em branco para manter)\nOpções: ' + (window._statusLeads || []).map(s => s.nome).join(', '));
   await POST(`/leads/${leadId}/interacoes`, {tipo, descricao:desc, novo_status:novoStatus||null});
   abrirLead(leadId);
 }
@@ -978,9 +1083,12 @@ function whatsappLead(tel, nome) {
 // KANBAN
 // ══════════════════════════════════════════════
 async function renderKanban() {
+  await carregarStatusLeads();
   const leads = await GET('/leads');
-  const colunas = ['Novo','Contato','Visita','Proposta','Contrato','Fechado'];
-  const cores = {'Novo':'var(--blue)','Contato':'var(--accent)','Visita':'var(--purple)','Proposta':'var(--accent2)','Contrato':'#4ade80','Fechado':'var(--green)'};
+  const colunas = (window._statusLeads || []).filter(s => s.nome !== 'Perdido').map(s => s.nome);
+  const _coresPadrao = {'Novo':'var(--blue)','Contato':'var(--accent)','Visita':'var(--purple)','Proposta':'var(--accent2)','Contrato':'#4ade80','Fechado':'var(--green)'};
+  const cores = {};
+  (window._statusLeads || []).forEach(s => { cores[s.nome] = _coresPadrao[s.nome] || (/^#[0-9a-f]{6}$/i.test(s.cor || '') ? s.cor : '#64748b'); });
 
   document.getElementById('topbar-actions').innerHTML = `
     <button class="btn btn-primary" onclick="modalNovoLead()"><i class="fas fa-plus"></i> Novo Lead</button>`;
@@ -996,9 +1104,9 @@ async function renderKanban() {
         <div class="kanban-body">
           ${col_leads.map(l=>`
             <div class="kanban-card" style="border-left-color:${cores[l.temperatura==='Quente'?'red':'frio']}" onclick="abrirLead(${l.id})">
-              <div class="k-name">${l.nome}</div>
-              <div class="k-info"><i class="fas fa-phone" style="font-size:10px"></i>${l.telefone||'sem tel.'}</div>
-              ${l.empreendimento?`<div class="k-info" style="margin-top:4px"><i class="fas fa-building" style="font-size:10px"></i>${l.empreendimento}</div>`:''}
+              <div class="k-name">${_escCSV(l.nome)}</div>
+              <div class="k-info"><i class="fas fa-phone" style="font-size:10px"></i>${_escCSV(l.telefone||'sem tel.')}</div>
+              ${l.empreendimento?`<div class="k-info" style="margin-top:4px"><i class="fas fa-building" style="font-size:10px"></i>${_escCSV(l.empreendimento)}</div>`:''}
               <div class="k-tags">
                 ${tempBadge(l.temperatura)}
                 ${tipoBadge(l.tipo_interesse)}
@@ -1598,7 +1706,7 @@ async function renderWhatsapp() {
         <tbody>
           ${camps.map(c=>`
             <tr>
-              <td><div style="font-weight:600">${c.nome_campanha}</div><div style="font-size:11px;color:var(--text3)">${(c.mensagem||'').substring(0,60)}${(c.mensagem||'').length>60?'...':''}</div></td>
+              <td><div style="font-weight:600">${_escCSV(c.nome_campanha)}</div><div style="font-size:11px;color:var(--text3)">${(c.mensagem||'').substring(0,60)}${(c.mensagem||'').length>60?'...':''}</div></td>
               <td>${statusCamp(c.status)}</td>
               <td>${c.total_contatos}</td>
               <td style="color:var(--green)">${c.enviados}</td>
@@ -1606,7 +1714,9 @@ async function renderWhatsapp() {
               <td style="color:var(--text2)">${new Date(c.criado_em).toLocaleString('pt-BR')}</td>
               <td style="display:flex;gap:6px">
                 ${c.status==='Rascunho' ? `<button class="btn btn-sm btn-success" onclick="iniciarCampanha(${c.id})"><i class="fas fa-play"></i> Iniciar</button>` : ''}
-                <button class="btn btn-sm btn-secondary btn-icon" onclick="verCampanha(${c.id})"><i class="fas fa-eye"></i></button>
+                <button class="btn btn-sm btn-secondary btn-icon" title="Ver" onclick="verCampanha(${c.id})"><i class="fas fa-eye"></i></button>
+                <button class="btn btn-sm btn-secondary btn-icon" title="Editar" onclick="editarCampanha(${c.id})"><i class="fas fa-pen"></i></button>
+                <button class="btn btn-sm btn-secondary btn-icon" title="Duplicar" data-nome="${_escCSV(c.nome_campanha)}" onclick="duplicarCampanha(${c.id}, this.dataset.nome)"><i class="fas fa-copy"></i></button>
                 <button class="btn btn-sm btn-secondary btn-icon" title="Excluir campanha" onclick="excluirCampanha(${c.id})"><i class="fas fa-trash"></i></button>
               </td>
             </tr>`).join('') || `<tr><td colspan="7"><div class="empty-state"><i class="fab fa-whatsapp"></i><p>Nenhuma campanha criada</p></div></td></tr>`}
@@ -1615,49 +1725,83 @@ async function renderWhatsapp() {
     </div>`;
 }
 
-async function modalNovaCampanha() {
-  modal('Nova Campanha WhatsApp', `
+// ── Campanha: criar / editar / duplicar, várias mídias e botões de resposta ──────────
+window._waMidias = [];
+window._waBotoes = {cabecalho: 'Responda com o número:', itens: []};
+window._waEdicao = null;      // {id, status} quando estiver editando
+
+const _ROTULO_ACAO = {registrar: 'Só registrar a resposta', status: 'Mudar status do lead', optout: 'Não quero receber (opt-out)'};
+
+function modalNovaCampanha() { return abrirFormularioCampanha(null); }
+
+async function abrirFormularioCampanha(dados) {
+  await carregarStatusLeads();
+  const edit = dados && dados.campanha ? dados : null;
+  const c = edit ? edit.campanha : {};
+  const bloqueada = edit && ['Enfileirada', 'Enviando'].includes(c.status);          // só o nome pode mudar
+  const jaIniciada = edit && c.status !== 'Rascunho';
+  window._waEdicao = edit ? {id: c.id, status: c.status} : null;
+  window._waMidias = edit ? (edit.midias || []).map(m => ({...m, local: null})) : [];
+  window._waBotoes = edit && edit.botoes ? {cabecalho: edit.botoes.cabecalho, itens: edit.botoes.itens.map(b => ({...b}))} : {cabecalho: 'Responda com o número:', itens: []};
+  window._waContatos = edit && !jaIniciada ? (edit.contatos || []).map(ct => ({nome: ct.nome, telefone: ct.telefone})) : [];
+  const dis = bloqueada ? 'disabled' : '';
+  const aviso = bloqueada
+    ? 'Esta campanha está em envio. Agora só o nome pode ser alterado.'
+    : (jaIniciada ? 'Esta campanha já foi iniciada. O que já foi enviado não muda: as alterações valem para os próximos envios e ficam registradas. Para um novo disparo com outra mensagem, use <strong>Duplicar</strong>.' : '');
+  const intervalo = Number(c.intervalo_segundos || 8);
+  modal(edit ? 'Editar Campanha' : 'Nova Campanha WhatsApp', `
+    ${aviso ? `<div style="margin-bottom:14px;padding:10px 12px;border-radius:9px;background:rgba(232,160,32,.12);border:1px solid rgba(232,160,32,.35);font-size:12px;color:var(--text2)">${aviso}</div>` : ''}
     <div class="form-group" style="margin-bottom:16px">
       <label>Nome da Campanha</label>
-      <input id="wa-nome" placeholder="Ex: Lançamento Torre A - Junho">
+      <input id="wa-nome" placeholder="Ex: Lançamento Torre A - Junho" value="${_escCSV(c.nome_campanha || '')}">
     </div>
     <div class="form-group" style="margin-bottom:16px">
-      <label>Mensagem <small style="color:var(--text3)">(use {{nome}} para personalizar)</small></label>
-      <textarea id="wa-msg" rows="5" placeholder="Olá {{nome}}! Temos uma oportunidade especial para você..."></textarea>
+      <label>Mensagem <small style="color:var(--text3)">(use {nome} para personalizar)</small></label>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+        <select id="wa-modelo" ${dis} onchange="aplicarModeloMsg()" style="flex:1;min-width:180px"><option value="">— Escolher modelo salvo —</option></select>
+        <button class="btn btn-sm btn-secondary" type="button" ${dis} onclick="salvarModeloMsg()"><i class="fas fa-bookmark"></i> Salvar como modelo</button>
+        <button class="btn btn-sm btn-secondary" type="button" ${dis} title="Excluir o modelo selecionado" onclick="excluirModeloMsg()"><i class="fas fa-trash"></i></button>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;font-size:12px;color:var(--text3);align-items:center">
+        Inserir:
+        <button class="chip" type="button" ${dis} onclick="inserirVariavelWA('{nome}')">{nome}</button>
+        <button class="chip" type="button" ${dis} onclick="inserirVariavelWA('{primeiro_nome}')">{primeiro_nome}</button>
+        <button class="chip" type="button" ${dis} onclick="inserirVariavelWA('{nome|cliente}')">{nome|cliente}</button>
+      </div>
+      <textarea id="wa-msg" rows="5" ${dis} oninput="previaMensagemWA()" placeholder="Olá {nome}! Temos uma oportunidade especial para você...">${_escCSV(c.mensagem || '')}</textarea>
+      <div id="wa-previa" style="display:none;margin-top:6px;padding:8px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:9px;font-size:12px;color:var(--text2);white-space:pre-wrap"></div>
+      <div style="font-size:11px;color:var(--text3);margin-top:4px"><code>{nome}</code> nome completo · <code>{primeiro_nome}</code> só o primeiro · <code>{nome|cliente}</code> usa "cliente" se o contato não tiver nome</div>
     </div>
 
     <div style="margin-bottom:16px">
-      <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:8px">Mídia da Campanha</label>
-      <input
-        type="file"
-        id="wa-media-file"
-        accept="image/jpeg,image/png,image/webp,video/mp4"
-        onchange="selecionarMidiaCampanha()"
-        style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:9px;width:100%"
-      >
-      <div id="wa-media-info" style="display:none;margin-top:8px;padding:10px;background:var(--bg2);border:1px solid var(--border);border-radius:9px;font-size:12px;color:var(--text2)"></div>
-      <div class="form-group" style="margin-top:10px">
-        <label>Legenda da mídia</label>
-        <input id="wa-media-caption" placeholder="Legenda opcional para a imagem/vídeo">
-      </div>
+      <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:8px">Mídias da Campanha <span id="wa-midias-cont" style="font-weight:400;text-transform:none"></span></label>
+      <input type="file" id="wa-media-file" ${dis} multiple accept="image/jpeg,image/png,image/webp,video/mp4" onchange="selecionarMidiasCampanha()"
+        style="background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:9px;width:100%">
+      <div id="wa-midias-lista" style="margin-top:8px"></div>
+      <div style="font-size:11px;color:var(--text3);margin-top:4px">Até 5 arquivos (JPG, PNG, WEBP ou vídeo MP4). Com <strong>uma</strong> mídia, a legenda (ou a mensagem) vai junto com ela. Com <strong>duas ou mais</strong>, as mídias saem primeiro e a mensagem vem por último.</div>
+    </div>
+
+    <div style="margin-bottom:16px">
+      <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:8px">Botões de resposta <small style="font-weight:400;text-transform:none">(opcional)</small></label>
+      <div id="wa-botoes-box"></div>
+      <div style="font-size:11px;color:var(--text3);margin-top:4px">O WhatsApp desta conexão não exibe botões clicáveis. Eles vão como <strong>opções numeradas</strong> no fim da mensagem; quando o contato responde o número, o CRM registra a resposta e aplica a ação (mudar status, opt-out).</div>
     </div>
 
     <div style="margin-bottom:16px">
       <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:8px">Intervalo entre envios</label>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="chip active" onclick="selecionarIntervalo(this,8)" id="int-8">8 seg</button>
-        <button class="chip" onclick="selecionarIntervalo(this,12)" id="int-12">12 seg</button>
-        <button class="chip" onclick="selecionarIntervalo(this,16)" id="int-16">16 seg</button>
-        <button class="chip" onclick="selecionarIntervalo(this,20)" id="int-20">20 seg</button>
+        ${[8, 12, 16, 20].map(v => `<button class="chip ${intervalo === v ? 'active' : ''}" ${dis} onclick="selecionarIntervalo(this,${v})" id="int-${v}">${v} seg</button>`).join('')}
       </div>
-      <input type="hidden" id="wa-intervalo" value="8">
+      <input type="hidden" id="wa-intervalo" value="${intervalo}">
     </div>
     <div style="margin-bottom:12px">
-      <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:8px">Importar Contatos</label>
-      <div style="display:flex;gap:8px;margin-bottom:8px">
-        <button class="btn btn-sm btn-secondary" onclick="importarLeads()"><i class="fas fa-users"></i> Importar dos Leads</button>
-        <button class="btn btn-sm btn-secondary" onclick="adicionarManual()"><i class="fas fa-plus"></i> Adicionar Manual</button>
-        <button class="btn btn-sm btn-secondary" onclick="importarCSV()"><i class="fas fa-file-csv"></i> Importar CSV</button>
+      <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:8px">${jaIniciada ? 'Adicionar novos contatos' : 'Importar Contatos'}</label>
+      ${jaIniciada ? `<div style="font-size:12px;color:var(--text3);margin-bottom:8px">${c.total_contatos || 0} contato(s) já na campanha. Os novos entram como pendentes e são enviados quando você clicar em Iniciar.</div>` : ''}
+      <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+        <button class="btn btn-sm btn-secondary" ${dis} onclick="importarLeads()"><i class="fas fa-users"></i> Importar dos Leads</button>
+        <button class="btn btn-sm btn-secondary" ${dis} onclick="adicionarManual()"><i class="fas fa-plus"></i> Adicionar Manual</button>
+        <button class="btn btn-sm btn-secondary" ${dis} onclick="importarCSV()"><i class="fas fa-file-csv"></i> Importar CSV</button>
+        <button class="btn btn-sm btn-secondary" ${dis} onclick="abrirImportacaoDrive(true)"><i class="fas fa-cloud-download-alt"></i> Do Google Drive</button>
       </div>
       <div id="wa-lista" class="wa-phone-list">
         <div style="padding:20px;text-align:center;color:var(--text3);font-size:13px">Nenhum contato adicionado</div>
@@ -1665,33 +1809,256 @@ async function modalNovaCampanha() {
       <div id="wa-count" style="font-size:12px;color:var(--text3);margin-top:6px">0 contatos</div>
     </div>`,
     `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-     <button class="btn btn-primary" onclick="criarCampanha()"><i class="fas fa-save"></i> Salvar Campanha</button>`, 'modal-lg');
+     <button class="btn btn-primary" onclick="criarCampanha()"><i class="fas fa-save"></i> ${edit ? 'Salvar alterações' : 'Salvar Campanha'}</button>`, 'modal-lg');
 
-  window._waContatos = [];
+  renderMidiasWA();
+  renderBotoesWA();
+  if(window._waContatos.length) atualizarListaWA();
+  carregarModelosMsg();
+  if(edit) previaMensagemWA();
+}
+
+// ---- mídias ----
+function renderMidiasWA() {
+  const box = document.getElementById('wa-midias-lista'), cont = document.getElementById('wa-midias-cont');
+  if(!box) return;
+  const bloq = window._waEdicao && ['Enfileirada', 'Enviando'].includes(window._waEdicao.status);
+  cont.textContent = window._waMidias.length ? `(${window._waMidias.length}/5)` : '';
+  box.innerHTML = window._waMidias.map((m, i) => {
+    const ehVideo = (m.media_type || '') === 'video';
+    const thumb = m.local ? (ehVideo ? `<video src="${m.local}" style="width:56px;height:56px;object-fit:cover;border-radius:8px"></video>` : `<img src="${m.local}" style="width:56px;height:56px;object-fit:cover;border-radius:8px">`)
+      : `<div style="width:56px;height:56px;border-radius:8px;background:var(--bg3,#222);display:flex;align-items:center;justify-content:center;color:var(--text3)"><i class="fas ${ehVideo ? 'fa-video' : 'fa-image'}"></i></div>`;
+    return `<div style="display:flex;gap:8px;align-items:center;padding:8px;background:var(--bg2);border:1px solid var(--border);border-radius:9px;margin-bottom:6px">
+      ${thumb}
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${i + 1}. ${_escCSV(m.media_name || '')}${m.tamanhoMB ? ` · ${m.tamanhoMB.toFixed(1)} MB` : ''}</div>
+        <input data-leg="${i}" ${bloq ? 'disabled' : ''} placeholder="Legenda (opcional)" value="${_escCSV(m.legenda || '')}" oninput="window._waMidias[${i}].legenda = this.value" style="margin-top:4px;font-size:12px">
+        ${m.aviso ? `<div style="font-size:11px;color:var(--accent);margin-top:2px">${_escCSV(m.aviso)}</div>` : ''}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <button class="btn btn-sm btn-secondary btn-icon" ${bloq || i === 0 ? 'disabled' : ''} title="Subir" onclick="moverMidiaWA(${i},-1)"><i class="fas fa-arrow-up"></i></button>
+        <button class="btn btn-sm btn-secondary btn-icon" ${bloq || i === window._waMidias.length - 1 ? 'disabled' : ''} title="Descer" onclick="moverMidiaWA(${i},1)"><i class="fas fa-arrow-down"></i></button>
+      </div>
+      <button class="btn btn-danger btn-sm btn-icon" ${bloq ? 'disabled' : ''} title="Remover" onclick="removerMidiaWA(${i})"><i class="fas fa-times"></i></button>
+    </div>`;
+  }).join('');
+}
+
+async function selecionarMidiasCampanha() {
+  const input = document.getElementById('wa-media-file');
+  const arquivos = [...(input.files || [])];
+  if(!arquivos.length) return;
+  if(window._waMidias.length + arquivos.length > 5) { alert('No máximo 5 mídias por campanha.'); input.value = ''; return; }
+  for(const file of arquivos) {
+    const tamanhoMB = file.size / (1024 * 1024);
+    const ehVideo = (file.type || '').startsWith('video/');
+    const avisos = [];
+    if(ehVideo && file.type !== 'video/mp4') avisos.push('Use vídeo MP4 (H.264/AAC); outros formatos podem não tocar no WhatsApp.');
+    if(ehVideo && tamanhoMB > 16) avisos.push('Vídeos acima de 16 MB demoram mais para enviar e podem falhar.');
+    if(!ehVideo && tamanhoMB > 5) avisos.push('Imagens acima de 5 MB são recomprimidas pelo WhatsApp.');
+    try {
+      const up = await uploadWhatsappMedia(file, '');
+      window._waMidias.push({media_path: up.media_path, media_name: up.media_name, media_type: up.media_type, media_mimetype: up.media_mimetype,
+        legenda: '', local: URL.createObjectURL(file), tamanhoMB, aviso: avisos.join(' ')});
+    } catch(err) {
+      alert(`Não foi possível enviar "${file.name}".\n\n${err.message || err}`);
+    }
+    renderMidiasWA();
+  }
+  input.value = '';
+}
+function removerMidiaWA(i) { window._waMidias.splice(i, 1); renderMidiasWA(); }
+function moverMidiaWA(i, d) {
+  const j = i + d;
+  if(j < 0 || j >= window._waMidias.length) return;
+  [window._waMidias[i], window._waMidias[j]] = [window._waMidias[j], window._waMidias[i]];
+  renderMidiasWA();
+}
+
+// ---- botões de resposta (opções numeradas) ----
+function textoBotoesWA() {
+  const it = (window._waBotoes.itens || []).filter(b => (b.texto || '').trim());
+  if(!it.length) return '';
+  return '\n\n' + [window._waBotoes.cabecalho || 'Responda com o número:'].concat(it.map((b, i) => `${i + 1}) ${b.texto.trim()}`)).join('\n');
+}
+function renderBotoesWA() {
+  const box = document.getElementById('wa-botoes-box');
+  if(!box) return;
+  const bloq = window._waEdicao && ['Enfileirada', 'Enviando'].includes(window._waEdicao.status);
+  const d = bloq ? 'disabled' : '';
+  const status = (window._statusLeads || []).filter(s => s.nome !== 'Perdido');
+  box.innerHTML = (window._waBotoes.itens.length ? `<input ${d} value="${_escCSV(window._waBotoes.cabecalho)}" oninput="window._waBotoes.cabecalho = this.value; previaMensagemWA()" placeholder="Título das opções" style="margin-bottom:6px;font-size:12px">` : '')
+    + window._waBotoes.itens.map((b, i) => `
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+        <span style="width:18px;font-size:12px;color:var(--text3)">${i + 1}</span>
+        <input ${d} style="flex:2;min-width:140px" maxlength="60" placeholder="Texto da opção (ex.: Tenho interesse)" value="${_escCSV(b.texto || '')}" oninput="window._waBotoes.itens[${i}].texto = this.value; previaMensagemWA()">
+        <select ${d} style="flex:1;min-width:150px" onchange="window._waBotoes.itens[${i}].acao = this.value; if(this.value==='status' && !window._waBotoes.itens[${i}].valor) window._waBotoes.itens[${i}].valor = '${_escCSV((status[0] || {}).nome || 'Novo')}'; renderBotoesWA()">
+          ${Object.entries(_ROTULO_ACAO).map(([k, v]) => `<option value="${k}" ${b.acao === k ? 'selected' : ''}>${v}</option>`).join('')}
+        </select>
+        ${b.acao === 'status' ? `<select ${d} style="flex:1;min-width:120px" onchange="window._waBotoes.itens[${i}].valor = this.value">${status.map(s => `<option ${s.nome === b.valor ? 'selected' : ''}>${_escCSV(s.nome)}</option>`).join('')}</select>` : ''}
+        <button class="btn btn-danger btn-sm btn-icon" ${d} title="Remover" onclick="removerBotaoWA(${i})"><i class="fas fa-times"></i></button>
+      </div>`).join('')
+    + (window._waBotoes.itens.length < 5 ? `<button class="btn btn-sm btn-secondary" ${d} type="button" onclick="adicionarBotaoWA()"><i class="fas fa-plus"></i> Adicionar opção de resposta</button>` : '');
+}
+function adicionarBotaoWA() { window._waBotoes.itens.push({texto: '', acao: 'registrar', valor: ''}); renderBotoesWA(); }
+function removerBotaoWA(i) { window._waBotoes.itens.splice(i, 1); renderBotoesWA(); previaMensagemWA(); }
+
+// ---- salvar (criar ou editar) ----
+async function criarCampanha() {
+  const nome = document.getElementById('wa-nome').value.trim();
+  const msg = document.getElementById('wa-msg').value.trim();
+  const edicao = window._waEdicao;
+  const bloqueada = edicao && ['Enfileirada', 'Enviando'].includes(edicao.status);
+  const jaIniciada = edicao && edicao.status !== 'Rascunho';
+  if(!nome) return alert('Nome da campanha é obrigatório!');
+  if(!bloqueada) {
+    if(!msg && !window._waMidias.length) return alert('Informe uma mensagem ou anexe ao menos uma mídia!');
+    if(!edicao && !window._waContatos?.length) return alert('Adicione ao menos um contato!');
+    if(edicao && !jaIniciada && !window._waContatos?.length) return alert('A campanha precisa de ao menos um contato!');
+  }
+  const botoesValidos = (window._waBotoes.itens || []).filter(b => (b.texto || '').trim());
+  const btn = document.querySelector('#modal-container .modal-footer .btn-primary');
+  const rotulo = btn ? btn.innerHTML : '';
+  if(btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Salvando...'; }
+  try {
+    const comum = {
+      nome_campanha: nome,
+      mensagem: msg,
+      intervalo_segundos: parseInt(document.getElementById('wa-intervalo').value) || 8,
+      midias: window._waMidias.map(m => ({media_path: m.media_path, media_name: m.media_name, media_type: m.media_type, media_mimetype: m.media_mimetype, legenda: (m.legenda || '').trim()})),
+      botoes: botoesValidos.length ? {cabecalho: window._waBotoes.cabecalho, itens: botoesValidos} : null
+    };
+    let r;
+    if(!edicao) {
+      r = await POST('/whatsapp/campanhas', {...comum, contatos: window._waContatos});
+    } else if(bloqueada) {
+      r = await PUT(`/whatsapp/campanhas/${edicao.id}`, {nome_campanha: nome});
+    } else if(jaIniciada) {
+      r = await PUT(`/whatsapp/campanhas/${edicao.id}`, {...comum, adicionar_contatos: window._waContatos});
+    } else {
+      r = await PUT(`/whatsapp/campanhas/${edicao.id}`, {...comum, contatos: window._waContatos});
+    }
+    if(!r || !r.success) throw new Error((r && r.error) || 'Erro ao salvar a campanha');
+    closeModal();
+    renderWhatsapp();
+    alert(edicao
+      ? `✅ Campanha atualizada.${r.contatos_adicionados ? `\n${r.contatos_adicionados} contato(s) novo(s) adicionado(s) — clique em Iniciar para enviar.` : ''}`
+      : `✅ Campanha criada com ${window._waContatos.length} contatos!\nAcesse a campanha para iniciar o envio.`);
+  } catch(err) {
+    console.error('Erro ao salvar campanha:', err);
+    alert(`❌ Não foi possível salvar a campanha.\n\n${err.message || err}`);
+    if(btn) { btn.disabled = false; btn.innerHTML = rotulo; }
+  }
+}
+
+async function editarCampanha(id) {
+  const d = await GET(`/whatsapp/campanhas/${id}`);
+  if(!d || !d.campanha || !d.campanha.id) return alert('Campanha não encontrada.');
+  abrirFormularioCampanha(d);
+}
+
+// ---- duplicar ----
+function duplicarCampanha(id, nomeOriginal) {
+  modal('Duplicar campanha', `
+    <p style="font-size:13px;color:var(--text2);margin-bottom:12px">Cria um novo rascunho a partir desta campanha, por exemplo para um 2º contato. Depois você ajusta mensagem, mídias e botões.</p>
+    <div class="form-group" style="margin-bottom:14px"><label>Nome da nova campanha</label><input id="dup-nome" value="${_escCSV('Cópia de ' + (nomeOriginal || ''))}"></div>
+    <div style="margin-bottom:14px"><label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;display:block;margin-bottom:6px">Contatos</label>
+      ${[['todos', 'Todos os contatos'], ['enviados', 'Só quem recebeu (enviado ou entregue)'], ['entregues', 'Só quem teve a mensagem entregue'], ['nao_responderam', 'Quem recebeu e ainda não respondeu'], ['erros', 'Só os que deram erro ou foram bloqueados']].map(([v, t], i) =>
+        `<label style="display:flex;gap:8px;font-size:13px;margin:4px 0"><input type="radio" name="dup-quais" value="${v}" ${i === 0 ? 'checked' : ''}> ${t}</label>`).join('')}
+    </div>
+    <div><label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;display:block;margin-bottom:6px">Manter da campanha original</label>
+      <label style="display:flex;gap:8px;font-size:13px;margin:4px 0"><input type="checkbox" id="dup-msg" checked> Mensagem</label>
+      <label style="display:flex;gap:8px;font-size:13px;margin:4px 0"><input type="checkbox" id="dup-midias" checked> Mídias</label>
+      <label style="display:flex;gap:8px;font-size:13px;margin:4px 0"><input type="checkbox" id="dup-botoes" checked> Botões de resposta</label>
+    </div>
+    <p style="font-size:11px;color:var(--text3);margin-top:10px">Opt-in e opt-out são conferidos de novo ao iniciar: quem pediu para sair desde o primeiro envio não recebe.</p>`,
+    `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+     <button class="btn btn-primary" onclick="confirmarDuplicarCampanha(${id})"><i class="fas fa-copy"></i> Criar cópia e editar</button>`);
+}
+
+async function confirmarDuplicarCampanha(id) {
+  const r = await POST(`/whatsapp/campanhas/${id}/duplicar`, {
+    nome: document.getElementById('dup-nome').value.trim(),
+    contatos: document.querySelector('input[name="dup-quais"]:checked').value,
+    manter_mensagem: document.getElementById('dup-msg').checked,
+    manter_midias: document.getElementById('dup-midias').checked,
+    manter_botoes: document.getElementById('dup-botoes').checked
+  });
+  if(!r || !r.success) return alert((r && r.error) || 'Não foi possível duplicar a campanha.');
+  closeModal();
+  renderWhatsapp();
+  editarCampanha(r.id);
+}
+
+// ── Modelos de mensagem e variáveis ({nome}) da campanha ──────────────────────
+async function carregarModelosMsg() {
+  const sel = document.getElementById('wa-modelo');
+  if(!sel) return;
+  const lista = await GET('/whatsapp/modelos');
+  window._modelosMsg = Array.isArray(lista) ? lista : [];
+  sel.innerHTML = '<option value="">— Escolher modelo salvo —</option>' + window._modelosMsg.map(m => `<option value="${m.id}">${_escCSV(m.nome)}</option>`).join('');
+}
+
+function aplicarModeloMsg() {
+  const id = document.getElementById('wa-modelo').value;
+  const m = (window._modelosMsg || []).find(x => String(x.id) === id);
+  if(!m) return;
+  document.getElementById('wa-msg').value = m.texto;
+  previaMensagemWA();
+}
+
+async function salvarModeloMsg() {
+  const texto = document.getElementById('wa-msg').value.trim();
+  if(!texto) return alert('Escreva a mensagem antes de salvar como modelo.');
+  const sel = document.getElementById('wa-modelo');
+  const atual = (window._modelosMsg || []).find(x => String(x.id) === sel.value);
+  const nome = prompt('Nome do modelo:' + (atual ? '\n(usar o mesmo nome atualiza o modelo)' : ''), atual ? atual.nome : '');
+  if(!nome || !nome.trim()) return;
+  const r = await POST('/whatsapp/modelos', {nome: nome.trim(), texto});
+  if(!r || !r.success) return alert((r && r.error) || 'Não foi possível salvar o modelo.');
+  await carregarModelosMsg();
+  sel.value = String(r.id);
+  alert(r.atualizado ? 'Modelo atualizado.' : 'Modelo salvo.');
+}
+
+async function excluirModeloMsg() {
+  const sel = document.getElementById('wa-modelo');
+  if(!sel.value) return alert('Escolha um modelo para excluir.');
+  if(!confirm('Excluir este modelo de mensagem?')) return;
+  await DEL(`/whatsapp/modelos/${sel.value}`);
+  await carregarModelosMsg();
+}
+
+function inserirVariavelWA(variavel) {
+  const t = document.getElementById('wa-msg');
+  const ini = t.selectionStart ?? t.value.length, fim = t.selectionEnd ?? ini;
+  t.value = t.value.slice(0, ini) + variavel + t.value.slice(fim);
+  t.focus();
+  t.selectionStart = t.selectionEnd = ini + variavel.length;
+  previaMensagemWA();
+}
+
+let _previaTimerWA = null;
+function previaMensagemWA() {
+  clearTimeout(_previaTimerWA);
+  _previaTimerWA = setTimeout(async () => {
+    const box = document.getElementById('wa-previa');
+    if(!box) return;
+    const texto = document.getElementById('wa-msg').value;
+    if(!texto.trim()) { box.style.display = 'none'; return; }
+    const nome = (window._waContatos && window._waContatos[0] && window._waContatos[0].nome) || 'Maria Souza';
+    const r = await POST('/whatsapp/previa', {texto, nome});
+    if(r && r.success) {
+      box.style.display = 'block';
+      box.textContent = `Prévia (${nome}):\n` + r.texto + (typeof textoBotoesWA === 'function' ? textoBotoesWA() : '');
+    }
+  }, 300);
 }
 
 function selecionarIntervalo(btn, val) {
   document.querySelectorAll('.modal [id^="int-"]').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('wa-intervalo').value = val;
-}
-
-function selecionarMidiaCampanha() {
-  const input = document.getElementById('wa-media-file');
-  const info = document.getElementById('wa-media-info');
-  if(!input || !info) return;
-
-  const file = input.files?.[0];
-  if(!file) {
-    info.style.display = 'none';
-    info.textContent = '';
-    return;
-  }
-
-  const tamanhoMB = file.size / (1024 * 1024);
-  if(tamanhoMB > 64) { input.value=''; info.style.display='block'; info.innerHTML='<span style="color:var(--red)">❌ Arquivo maior que 64 MB.</span>'; return; }
-  info.style.display = 'block';
-  info.innerHTML = `<strong>Arquivo:</strong> ${file.name}<br><strong>Tipo:</strong> ${file.type || 'desconhecido'}<br><strong>Tamanho:</strong> ${tamanhoMB.toFixed(2)} MB`;
 }
 
 function atualizarListaWA() {
@@ -1744,7 +2111,10 @@ const _ALIAS_CSV = {
   email: ['email','e-mail'],
   opt_in: ['optin','opt-in','opt_in','consentimento','autorizawhatsapp','aceitawhatsapp','whatsappoptin','autorizacao'],
   opt_out: ['optout','opt-out','opt_out','descadastrado','naoreceber'],
-  origem_consentimento: ['origemconsentimento','origemoptin','origemdoconsentimento','fonteconsentimento','origem'],
+  origem_consentimento: ['origemconsentimento','origemoptin','origemdoconsentimento','fonteconsentimento','fonteoptin'],
+  status: ['status','situacao','etapa','fase','funil'],
+  origem: ['origem','fonte','canal'],
+  observacoes: ['observacoes','observacao','obs','anotacoes','notas'],
   data_consentimento: ['dataconsentimento','dataoptin','datadoconsentimento']
 };
 const _normCab = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');
@@ -1800,30 +2170,93 @@ function lerCSVContatos(texto) {
 
 function importarCSV() { abrirImportacaoLeadsCSV(true); }
 
+function processarTextoImportCSV(texto, nomeArquivo, paraCampanha) {
+  const lido = lerCSVContatos(texto);
+  if(lido.erro) { alert(lido.erro); return; }
+  window._impCSV = {linhas: lido.linhas, colunas: lido.colunas, semCabecalho: lido.semCabecalho, arquivo: nomeArquivo, paraCampanha: !!paraCampanha, concluida: false};
+  mostrarDialogoImportCSV();
+}
+
+async function converterXlsxNoServidor(file) {
+  const fd = new FormData();
+  fd.append('arquivo', file);
+  const resp = await fetch('/api/importar/converter', {method: 'POST', body: fd, credentials: 'same-origin'});
+  return resp.json();
+}
+
 function abrirImportacaoLeadsCSV(paraCampanha) {
   const input = document.createElement('input');
-  input.type = 'file'; input.accept = '.csv,.txt';
-  input.onchange = e => {
+  input.type = 'file'; input.accept = '.csv,.txt,.xlsx';
+  input.onchange = async e => {
     const file = e.target.files[0];
     if(!file) return;
-    const processar = texto => {
-      const lido = lerCSVContatos(texto);
-      if(lido.erro) { alert(lido.erro); return; }
-      window._impCSV = {linhas: lido.linhas, colunas: lido.colunas, semCabecalho: lido.semCabecalho, arquivo: file.name, paraCampanha: !!paraCampanha, concluida: false};
-      mostrarDialogoImportCSV();
-    };
+    if(/\.xlsx$/i.test(file.name)) {
+      let r;
+      try { r = await converterXlsxNoServidor(file); } catch(err) { alert('Falha ao enviar a planilha ao servidor.'); return; }
+      if(!r || !r.success) { alert((r && r.error) || 'Não foi possível ler a planilha.'); return; }
+      processarTextoImportCSV(r.texto, file.name, paraCampanha);
+      return;
+    }
     const leitor = new FileReader();
     leitor.onload = ev => {
-      let texto = ev.target.result;
+      const texto = ev.target.result;
       if(texto.includes('\uFFFD')) {            // CSV do Excel em Windows-1252
         const l2 = new FileReader();
-        l2.onload = e2 => processar(e2.target.result);
+        l2.onload = e2 => processarTextoImportCSV(e2.target.result, file.name, paraCampanha);
         l2.readAsText(file, 'windows-1252');
-      } else processar(texto);
+      } else processarTextoImportCSV(texto, file.name, paraCampanha);
     };
     leitor.readAsText(file, 'UTF-8');
   };
   input.click();
+}
+
+function fecharDriveCSV() { document.getElementById('imp-drive-overlay')?.remove(); }
+
+async function abrirImportacaoDrive(paraCampanha) {
+  fecharDriveCSV();
+  const ov = document.createElement('div');
+  ov.id = 'imp-drive-overlay'; ov.className = 'modal-overlay'; ov.style.zIndex = 2100;
+  ov.innerHTML = `
+    <div class="modal fade-in">
+      <div class="modal-header"><h2>Importar do Google Drive</h2><button class="modal-close" onclick="fecharDriveCSV()">×</button></div>
+      <div class="modal-body">
+        <p style="font-size:12px;color:var(--text3);margin-bottom:10px" id="drive-pasta">Carregando...</p>
+        <div id="drive-lista" style="max-height:300px;overflow:auto"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="fecharDriveCSV()">Fechar</button>
+        <button class="btn btn-secondary" onclick="listarArquivosDrive(${paraCampanha ? 'true' : 'false'})"><i class="fas fa-sync"></i> Atualizar lista</button>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+  listarArquivosDrive(paraCampanha);
+}
+
+async function listarArquivosDrive(paraCampanha) {
+  const lista = document.getElementById('drive-lista'), pasta = document.getElementById('drive-pasta');
+  if(!lista) return;
+  lista.textContent = 'Carregando...';
+  const r = await GET('/importar/drive');
+  if(!r || !r.success) { lista.innerHTML = `<span style="color:var(--red)">${_escCSV((r && r.error) || 'Não foi possível acessar a pasta.')}</span>`; return; }
+  pasta.innerHTML = `Pasta: <code>${_escCSV(r.pasta)}</code><br>Coloque aqui seus arquivos .csv, .txt ou .xlsx pelo Google Drive. Arquivos novos podem levar alguns segundos para aparecer.`;
+  if(!r.arquivos.length) { lista.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text3);font-size:13px">Nenhum arquivo nesta pasta.</div>'; return; }
+  lista.innerHTML = r.arquivos.map((a, i) => `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--border)">
+      <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis">${_escCSV(a.nome)}</div>
+        <div style="font-size:11px;color:var(--text3)">${_escCSV(a.tamanho_kb)} KB · ${_escCSV(a.modificado)}</div></div>
+      <button class="btn btn-sm btn-primary" data-i="${i}">Usar</button>
+    </div>`).join('');
+  lista.querySelectorAll('button[data-i]').forEach(btn => {
+    btn.onclick = async () => {
+      const arq = r.arquivos[Number(btn.dataset.i)];
+      btn.disabled = true; btn.textContent = 'Lendo...';
+      const lido = await POST('/importar/drive/ler', {arquivo: arq.nome});
+      if(!lido || !lido.success) { alert((lido && lido.error) || 'Não foi possível ler o arquivo.'); btn.disabled = false; btn.textContent = 'Usar'; return; }
+      fecharDriveCSV();
+      processarTextoImportCSV(lido.texto, arq.nome, paraCampanha);
+    };
+  });
 }
 
 function fecharDialogoImportCSV() { document.getElementById('imp-csv-overlay')?.remove(); }
@@ -1832,7 +2265,7 @@ function mostrarDialogoImportCSV() {
   fecharDialogoImportCSV();
   const d = window._impCSV;
   const temOptin = d.colunas.includes('opt_in');
-  const rotulos = {nome:'Nome', telefone:'Telefone', email:'E-mail', opt_in:'Opt-in', opt_out:'Opt-out', origem_consentimento:'Origem do consentimento', data_consentimento:'Data do consentimento'};
+  const rotulos = {nome:'Nome', telefone:'Telefone', email:'E-mail', opt_in:'Opt-in', opt_out:'Opt-out', origem_consentimento:'Origem do consentimento', data_consentimento:'Data do consentimento', status:'Status', origem:'Origem do lead', observacoes:'Observações'};
   const ov = document.createElement('div');
   ov.id = 'imp-csv-overlay'; ov.className = 'modal-overlay'; ov.style.zIndex = 2000;
   ov.innerHTML = `
@@ -1847,6 +2280,7 @@ function mostrarDialogoImportCSV() {
         ${temOptin
           ? `<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:10px 0"><input type="checkbox" id="imp-optin-padrao"> <span>Tratar linhas com a coluna de opt-in <strong>vazia</strong> como autorizadas</span></label>`
           : `<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:10px 0"><input type="checkbox" id="imp-optin-padrao"> <span>Este arquivo <strong>não tem coluna de opt-in</strong>. Marque se <strong>todos</strong> os contatos autorizaram contato por WhatsApp. Sem marcar, os leads são cadastrados <strong>sem</strong> opt-in e não poderão receber campanha.</span></label>`}
+        ${d.colunas.includes('status') ? `<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:10px 0"><input type="checkbox" id="imp-atualizar-status"> <span>Atualizar o <strong>status</strong> dos leads que já existem com o da planilha (status novos são sempre criados)</span></label>` : ''}
         <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:10px 0"><input type="checkbox" id="imp-confirmo"> <span>Confirmo que tenho base legal e registro do consentimento dos contatos marcados como opt-in.</span></label>
         <div id="imp-csv-relatorio" style="margin-top:12px;font-size:13px"></div>
       </div>
@@ -1867,7 +2301,8 @@ async function executarImportCSV(simular) {
     linhas: d.linhas, fonte: d.arquivo, simular: !!simular,
     origem_padrao: document.getElementById('imp-origem').value.trim(),
     opt_in_padrao: document.getElementById('imp-optin-padrao').checked,
-    confirmo_base_legal: document.getElementById('imp-confirmo').checked
+    confirmo_base_legal: document.getElementById('imp-confirmo').checked,
+    atualizar_status: !!(document.getElementById('imp-atualizar-status') && document.getElementById('imp-atualizar-status').checked)
   };
   rel.textContent = 'Processando...';
   let r;
@@ -1883,10 +2318,13 @@ async function executarImportCSV(simular) {
     ['Já tinham opt-in', r.ja_tinham_optin],
     ['Opt-in ignorado (lead com opt-out)', r.optin_ignorado_por_optout],
     ['Opt-out registrados', r.optout_registrados],
+    ['Leads arquivados encontrados (continuam arquivados)', r.arquivados_encontrados],
+    ['Status atualizados em leads existentes', r.status_atualizados],
     ['Elegíveis para campanha / não elegíveis', `${r.elegiveis} / ${r.nao_elegiveis}`],
     ['Linhas com erro', r.erros_total]
   ];
   let html = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px">${linhasRel.map(([k,v])=>`<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0"><span>${_escCSV(k)}</span><strong>${_escCSV(v)}</strong></div>`).join('')}</div>`;
+  if(r.status_novos && r.status_novos.length) html += `<div style="margin-top:8px;font-size:13px">${r.simulado ? 'Status que serão criados' : 'Status novos criados'}: <strong>${r.status_novos.map(_escCSV).join(', ')}</strong></div>`;
   if(r.erros && r.erros.length) html += `<div style="margin-top:8px;color:var(--red);font-size:12px">${r.erros.slice(0,10).map(e=>`Linha ${_escCSV(e.linha)}: ${_escCSV(e.motivo)}`).join('<br>')}${r.erros_total>10?'<br>…':''}</div>`;
   if(r.avisos && r.avisos.length) html += `<div style="margin-top:8px;color:var(--text3);font-size:12px">${r.avisos.slice(0,5).map(e=>`Linha ${_escCSV(e.linha)}: ${_escCSV(e.motivo)}`).join('<br>')}</div>`;
   if(!r.simulado && d.paraCampanha) {
@@ -1900,62 +2338,10 @@ async function executarImportCSV(simular) {
   rel.innerHTML = html;
   if(!r.simulado) {
     d.concluida = true;
+    if(r.status_novos && r.status_novos.length) carregarStatusLeads(true);
     const go = document.getElementById('imp-btn-go'), sim = document.getElementById('imp-btn-sim');
     if(go) go.disabled = true;
     if(sim) sim.disabled = true;
-  }
-}
-
-async function criarCampanha() {
-  const nome = document.getElementById('wa-nome').value.trim();
-  const msg = document.getElementById('wa-msg').value.trim();
-  const mediaInput = document.getElementById('wa-media-file');
-  const mediaCaption = document.getElementById('wa-media-caption')?.value || '';
-
-  if(!nome) return alert('Nome da campanha é obrigatório!');
-  if(!msg && !mediaInput?.files?.length) return alert('Informe uma mensagem ou selecione uma mídia!');
-  if(!window._waContatos?.length) return alert('Adicione ao menos um contato!');
-
-  const btn = document.querySelector('#modal-container .modal-footer .btn-primary');
-  if(btn) {
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Salvando...';
-  }
-
-  try {
-    let media = null;
-
-    if(mediaInput?.files?.length) {
-      media = await uploadWhatsappMedia(mediaInput.files[0], mediaCaption);
-    }
-
-    const r = await POST('/whatsapp/campanhas', {
-      nome_campanha: nome,
-      mensagem: msg,
-      contatos: window._waContatos,
-      intervalo_segundos: parseInt(document.getElementById('wa-intervalo').value)||5,
-      media_path: media?.media_path || null,
-      media_name: media?.media_name || null,
-      media_type: media?.media_type || null,
-      media_mimetype: media?.media_mimetype || null,
-      media_caption: media?.media_caption || null
-    });
-
-    if(!r.success) {
-      throw new Error(r.error || 'Erro ao criar campanha');
-    }
-
-    closeModal();
-    renderWhatsapp();
-    alert(`✅ Campanha criada com ${window._waContatos.length} contatos!\n${media ? '📎 Mídia anexada: ' + media.media_name + '\n' : ''}Acesse a campanha para iniciar o envio.`);
-  } catch(err) {
-    console.error('Erro ao criar campanha:', err);
-    alert(`❌ Não foi possível criar a campanha.\n\n${err.message || err}`);
-  } finally {
-    if(btn) {
-      btn.disabled = false;
-      btn.innerHTML = '<i class="fas fa-save"></i> Salvar Campanha';
-    }
   }
 }
 
@@ -1998,10 +2384,14 @@ async function reprocessarCampanha(id, incluirBloqueados) {
 async function verCampanha(id) {
   const d = await GET(`/whatsapp/campanhas/${id}`);
   const c = d.campanha;
-  const contatos = d.contatos||[];
-  const perc = c.total_contatos ? Math.round((c.enviados/c.total_contatos)*100) : 0;
+  const contatos = d.contatos || [];
+  const midias = d.midias || [];
+  const botoes = d.botoes;
+  const perc = c.total_contatos ? Math.round((c.enviados / c.total_contatos) * 100) : 0;
+  const respostas = contatos.filter(ct => ct.resposta).length;
+  const emEnvio = ['Enviando', 'Enfileirada'].includes(c.status);
 
-  modal(`Campanha: ${c.nome_campanha}`, `
+  modal(`Campanha: ${_escCSV(c.nome_campanha)}`, `
     <div class="wa-progress">
       <div style="display:flex;justify-content:space-between;margin-bottom:8px">
         <span style="font-weight:600">${c.enviados}/${c.total_contatos} enviados</span>
@@ -2009,28 +2399,31 @@ async function verCampanha(id) {
       </div>
       <div class="wa-progress-bar"><div class="wa-progress-fill" id="wa-prog-fill" style="width:${perc}%"></div></div>
       <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2)">
-        <span>Status: <strong>${c.status}</strong></span><span>${perc}%</span>
+        <span>Status: <strong>${_escCSV(c.status)}</strong>${respostas ? ` · ${respostas} resposta(s)` : ''}</span><span>${perc}%</span>
       </div>
     </div>
-    <div style="margin-top:16px;font-size:13px;background:var(--bg2);padding:12px;border-radius:10px;border:1px solid var(--border);max-height:80px;overflow:hidden;color:var(--text2)">${c.mensagem||'Sem texto'}</div>
-    ${c.media_name ? `<div style="margin-top:10px;font-size:12px;background:rgba(37,211,102,0.08);padding:10px;border-radius:9px;border:1px solid rgba(37,211,102,0.25);color:var(--text2)"><i class="fas fa-paperclip" style="color:#25d366"></i> Mídia: <strong>${c.media_name}</strong>${c.media_caption ? `<br><span style="color:var(--text3)">Legenda: ${c.media_caption}</span>` : ''}</div>` : ''}
+    <div style="margin-top:16px;font-size:13px;background:var(--bg2);padding:12px;border-radius:10px;border:1px solid var(--border);max-height:110px;overflow:auto;color:var(--text2);white-space:pre-wrap">${_escCSV(c.mensagem || 'Sem texto')}${botoes ? _escCSV('\n\n' + [botoes.cabecalho].concat(botoes.itens.map((b, i) => `${i + 1}) ${b.texto}`)).join('\n')) : ''}</div>
+    ${midias.length ? `<div style="margin-top:10px;font-size:12px;background:rgba(37,211,102,0.08);padding:10px;border-radius:9px;border:1px solid rgba(37,211,102,0.25);color:var(--text2)">
+      <i class="fas fa-paperclip" style="color:#25d366"></i> ${midias.length} mídia(s):
+      ${midias.map((m, i) => `<div>${i + 1}. <strong>${_escCSV(m.media_name || '')}</strong>${m.legenda ? ` <span style="color:var(--text3)">— ${_escCSV(m.legenda)}</span>` : ''}</div>`).join('')}</div>` : ''}
+    ${botoes ? `<div style="margin-top:10px;font-size:12px;color:var(--text2)"><i class="fas fa-reply"></i> Respostas: ${botoes.itens.map((b, i) => `${i + 1}) ${_escCSV(b.texto)} <span style="color:var(--text3)">[${b.acao === 'status' ? 'status → ' + _escCSV(b.valor) : b.acao === 'optout' ? 'opt-out' : 'registrar'}]</span>`).join(' · ')}</div>` : ''}
+    ${c.duplicada_de ? `<div style="margin-top:8px;font-size:11px;color:var(--text3)">Criada a partir da campanha #${c.duplicada_de}</div>` : ''}
     <div class="wa-phone-list" style="margin-top:12px;max-height:300px" id="wa-contatos-list">
-      ${contatos.map(ct=>`
+      ${contatos.map(ct => `
         <div class="wa-phone-item">
-          <div class="wa-status ${['enviado','entregue'].includes(ct.status.toLowerCase())?'sent':['erro','bloqueado'].includes(ct.status.toLowerCase())?'error':'pending'}"></div>
-          <div style="flex:1"><div style="font-size:13px">${ct.nome||ct.telefone}</div><div style="font-size:11px;color:var(--text2)">${ct.telefone}</div></div>
-          <span style="font-size:11px;color:var(--text3)">${ct.status}</span>
+          <div class="wa-status ${['enviado', 'entregue'].includes(ct.status.toLowerCase()) ? 'sent' : ['erro', 'bloqueado'].includes(ct.status.toLowerCase()) ? 'error' : 'pending'}"></div>
+          <div style="flex:1"><div style="font-size:13px">${_escCSV(ct.nome || ct.telefone)}</div><div style="font-size:11px;color:var(--text2)">${_escCSV(ct.telefone)}${ct.resposta ? ` · <span style="color:var(--green)">respondeu: ${_escCSV(ct.resposta)}</span>` : ''}${ct.erro_msg ? ` · <span style="color:var(--red)">${_escCSV(ct.erro_msg)}</span>` : ''}</div></div>
+          <span style="font-size:11px;color:var(--text3)">${_escCSV(ct.status)}</span>
         </div>`).join('')}
     </div>
-    ${['Enviando','Enfileirada'].includes(c.status) ? `<div style="text-align:center;margin-top:12px;color:var(--accent);font-size:13px"><i class="fas fa-circle-notch fa-spin"></i> Enviando em background... <button class="btn btn-sm btn-secondary" onclick="verCampanha(${id})" style="margin-left:8px">↻ Atualizar</button></div>` : ''}`,
-    `${contatos.some(ct=>ct.status==='Erro') ? `<button class="btn btn-secondary" onclick="reprocessarCampanha(${id}, false)"><i class="fas fa-redo"></i> Reprocessar erros</button>` : ''}
-     ${contatos.some(ct=>ct.status==='Bloqueado') ? `<button class="btn btn-secondary" onclick="reprocessarCampanha(${id}, true)"><i class="fas fa-redo"></i> Reprocessar erros e bloqueados</button>` : ''}
+    ${emEnvio ? `<div style="text-align:center;margin-top:12px;color:var(--accent);font-size:13px"><i class="fas fa-circle-notch fa-spin"></i> Enviando em background... <button class="btn btn-sm btn-secondary" onclick="verCampanha(${id})" style="margin-left:8px">↻ Atualizar</button></div>` : ''}`,
+    `${!emEnvio && contatos.some(ct => ct.status === 'Erro') ? `<button class="btn btn-secondary" onclick="reprocessarCampanha(${id}, false)"><i class="fas fa-redo"></i> Reprocessar erros</button>` : ''}
+     ${!emEnvio && contatos.some(ct => ct.status === 'Bloqueado') ? `<button class="btn btn-secondary" onclick="reprocessarCampanha(${id}, true)"><i class="fas fa-redo"></i> Reprocessar erros e bloqueados</button>` : ''}
+     <button class="btn btn-secondary" onclick="closeModal();editarCampanha(${id})"><i class="fas fa-pen"></i> Editar</button>
+     <button class="btn btn-secondary" data-nome="${_escCSV(c.nome_campanha)}" onclick="closeModal();duplicarCampanha(${id}, this.dataset.nome)"><i class="fas fa-copy"></i> Duplicar</button>
      <button class="btn btn-secondary" onclick="closeModal()">Fechar</button>`, 'modal-lg');
 }
 
-// ══════════════════════════════════════════════
-// TABELÃO / UNIDADES
-// ══════════════════════════════════════════════
 async function renderUnidades() {
   const emprs = await GET('/empreendimentos');
   const optsE = emprs.map(e=>`<option value="${e.id}">${e.nome}</option>`).join('');
@@ -2232,8 +2625,9 @@ async function renderImportar() {
   document.getElementById('content').innerHTML = `
     <div class="card" style="margin-bottom:24px">
       <div class="card-title"><i class="fas fa-users" style="color:var(--green)"></i> Importar Leads / Contatos (CSV com opt-in)</div>
-      <p style="color:var(--text2);font-size:13px;margin-bottom:12px">Cadastra leads novos e atualiza nome e e-mail dos existentes. Colunas: <code>nome</code>, <code>telefone</code> (ou <code>numero</code>), <code>email</code>, <code>opt_in</code>, <code>opt_out</code>, <code>origem_consentimento</code>, <code>data_consentimento</code>. Sem cabeçalho: A = nome, B = número.</p>
-      <button class="btn btn-primary" onclick="abrirImportacaoLeadsCSV(false)"><i class="fas fa-file-csv"></i> Escolher CSV de contatos</button>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:12px">Cadastra leads novos e atualiza nome e e-mail dos existentes. Colunas: <code>nome</code>, <code>telefone</code> (ou <code>numero</code>), <code>email</code>, <code>status</code>, <code>origem</code>, <code>observacoes</code>, <code>opt_in</code>, <code>opt_out</code>, <code>origem_consentimento</code>, <code>data_consentimento</code>. Status que não existem no CRM são criados. Sem cabeçalho: A = nome, B = número.</p>
+      <button class="btn btn-primary" onclick="abrirImportacaoLeadsCSV(false)"><i class="fas fa-file-csv"></i> Escolher arquivo (CSV ou Excel)</button>
+      <button class="btn btn-secondary" onclick="abrirImportacaoDrive(false)"><i class="fas fa-cloud-download-alt"></i> Do Google Drive</button>
     </div>
     <div class="grid-2" style="margin-bottom:24px">
 

@@ -4,8 +4,12 @@ import sqlite3
 import json
 import os
 import hashlib
+import io
+import csv
+import re as _re
+import unicodedata as _unicodedata
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import requests
 import time
 import threading
@@ -27,6 +31,7 @@ from whatsapp.safe_queue import (
     connect as safe_queue_connect,
     recover_stuck,
     cancel_pending,
+    upsert_contact,
 )
 
 app = Flask(__name__)
@@ -45,6 +50,7 @@ CRM_DATA_ROOT = Path(
 )
 
 DATABASE_ROOT = CRM_DATA_ROOT / "database"
+CRM_IMPORT_ROOT = Path(os.getenv("CRM_IMPORT_ROOT", str(CRM_DATA_ROOT / "importacao")))
 DB_PATH = DATABASE_ROOT / "crm.db"
 
 # ─────────────────────────────────────────────
@@ -362,6 +368,9 @@ def init_db():
         "whatsapp_opt_in_source": "TEXT",
         "whatsapp_opt_in_at": "DATETIME",
         "whatsapp_opt_out": "INTEGER NOT NULL DEFAULT 0",
+        "arquivado": "INTEGER NOT NULL DEFAULT 0",
+        "arquivado_em": "DATETIME",
+        "motivo_arquivamento": "TEXT",
     }
 
     for column, definition in lead_fields.items():
@@ -387,6 +396,9 @@ def init_db():
         "media_type": "TEXT",
         "media_mimetype": "TEXT",
         "media_caption": "TEXT",
+        "botoes": "TEXT",
+        "edicoes_log": "TEXT",
+        "duplicada_de": "INTEGER",
     }
 
     for column, definition in campaign_fields.items():
@@ -405,11 +417,91 @@ def init_db():
         c.execute(
             "ALTER TABLE contatos_whatsapp ADD COLUMN queue_id TEXT"
         )
+    for _coluna, _definicao in (("resposta", "TEXT"), ("respondido_em", "DATETIME")):
+        if _coluna not in contato_columns:
+            c.execute(
+                f"ALTER TABLE contatos_whatsapp ADD COLUMN {_coluna} {_definicao}"
+            )
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS campanha_midias (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campanha_id INTEGER NOT NULL,
+            ordem INTEGER NOT NULL DEFAULT 1,
+            media_path TEXT NOT NULL,
+            media_name TEXT,
+            media_type TEXT,
+            media_mimetype TEXT,
+            legenda TEXT DEFAULT ''
+        )
+        """
+    )
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS contato_fila (
+            contato_id INTEGER NOT NULL,
+            queue_id TEXT NOT NULL,
+            ordem INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (contato_id, queue_id)
+        )
+        """
+    )
+    c.execute(
+        "CREATE TABLE IF NOT EXISTS respostas_processadas (message_id TEXT PRIMARY KEY, criado_em DATETIME DEFAULT CURRENT_TIMESTAMP)"
+    )
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS status_leads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            ordem INTEGER NOT NULL DEFAULT 0,
+            cor TEXT DEFAULT '',
+            criado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    for _nome, _ordem, _cor in (
+        ('Novo', 1, '#3b82f6'), ('Contato', 2, '#e8a020'), ('Visita', 3, '#a855f7'),
+        ('Proposta', 4, '#f5c842'), ('Contrato', 5, '#4ade80'), ('Fechado', 6, '#22c55e'),
+        ('Perdido', 9999, '#ef4444'),
+    ):
+        c.execute(
+            "INSERT OR IGNORE INTO status_leads (nome, ordem, cor) VALUES (?, ?, ?)",
+            (_nome, _ordem, _cor),
+        )
+    # status que ja existem nos leads mas ainda nao estao na tabela
+    for _linha in c.execute(
+        "SELECT DISTINCT TRIM(status) FROM leads WHERE status IS NOT NULL AND TRIM(status) <> ''"
+    ).fetchall():
+        _prox = (c.execute(
+            "SELECT COALESCE(MAX(ordem), 0) FROM status_leads WHERE ordem < 9999"
+        ).fetchone()[0] or 0) + 1
+        c.execute(
+            "INSERT OR IGNORE INTO status_leads (nome, ordem, cor) VALUES (?, ?, '#64748b')",
+            (_linha[0], _prox),
+        )
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS modelos_mensagem (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            texto TEXT NOT NULL,
+            criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+            atualizado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
 
     MEDIA_ROOT.mkdir(
         parents=True,
         exist_ok=True
     )
+    try:
+        CRM_IMPORT_ROOT.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
 
     conn.commit()
     conn.close()
@@ -465,9 +557,9 @@ def dashboard():
     mes_inicio = datetime.now().replace(day=1).strftime('%Y-%m-%d')
 
     stats = {
-        'leads_total': conn.execute('SELECT COUNT(*) FROM leads').fetchone()[0],
-        'leads_mes': conn.execute('SELECT COUNT(*) FROM leads WHERE criado_em >= ?', (mes_inicio,)).fetchone()[0],
-        'leads_novos': conn.execute('SELECT COUNT(*) FROM leads WHERE status="Novo"').fetchone()[0],
+        'leads_total': conn.execute('SELECT COUNT(*) FROM leads WHERE COALESCE(arquivado,0)=0').fetchone()[0],
+        'leads_mes': conn.execute('SELECT COUNT(*) FROM leads WHERE COALESCE(arquivado,0)=0 AND criado_em >= ?', (mes_inicio,)).fetchone()[0],
+        'leads_novos': conn.execute('SELECT COUNT(*) FROM leads WHERE COALESCE(arquivado,0)=0 AND status="Novo"').fetchone()[0],
         'negocios_abertos': conn.execute('SELECT COUNT(*) FROM negocios WHERE status NOT IN ("Fechado","Cancelado")').fetchone()[0],
         'negocios_fechados_mes': conn.execute('SELECT COUNT(*) FROM negocios WHERE status="Fechado" AND data_contrato >= ?', (mes_inicio,)).fetchone()[0],
         'vgv_mes': conn.execute('SELECT COALESCE(SUM(valor_venda),0) FROM negocios WHERE status="Fechado" AND data_contrato >= ?', (mes_inicio,)).fetchone()[0],
@@ -477,16 +569,18 @@ def dashboard():
     }
 
     # Funil de leads
-    funil = conn.execute('''SELECT status, COUNT(*) as total FROM leads GROUP BY status ORDER BY
-        CASE status WHEN "Novo" THEN 1 WHEN "Contato" THEN 2 WHEN "Visita" THEN 3
-        WHEN "Proposta" THEN 4 WHEN "Contrato" THEN 5 WHEN "Fechado" THEN 6 ELSE 7 END''').fetchall()
+    funil = conn.execute('''SELECT l.status AS status, COUNT(*) AS total, COALESCE(s.cor, '') AS cor
+        FROM leads l LEFT JOIN status_leads s ON s.nome = l.status
+        WHERE COALESCE(l.arquivado,0)=0
+        GROUP BY l.status ORDER BY COALESCE(s.ordem, 5000), l.status''').fetchall()
 
     # Leads por origem
-    origens = conn.execute('SELECT origem, COUNT(*) as total FROM leads GROUP BY origem ORDER BY total DESC LIMIT 6').fetchall()
+    origens = conn.execute('SELECT origem, COUNT(*) as total FROM leads WHERE COALESCE(arquivado,0)=0 GROUP BY origem ORDER BY total DESC LIMIT 6').fetchall()
 
     # Últimos leads
     ultimos_leads = conn.execute('''SELECT l.*, e.nome as empreendimento FROM leads l
         LEFT JOIN empreendimentos e ON l.empreendimento_id=e.id
+        WHERE COALESCE(l.arquivado,0)=0
         ORDER BY l.criado_em DESC LIMIT 8''').fetchall()
 
     # Tarefas do dia
@@ -626,6 +720,11 @@ def leads():
     if request.method == 'GET':
         filtros = []
         params = []
+        arquivados = request.args.get('arquivados', 'nao')
+        if arquivados == 'sim':
+            filtros.append('COALESCE(l.arquivado, 0)=1')
+        elif arquivados != 'todos':
+            filtros.append('COALESCE(l.arquivado, 0)=0')
         if request.args.get('status'):
             filtros.append('l.status=?'); params.append(request.args['status'])
         if request.args.get('temperatura'):
@@ -653,13 +752,96 @@ def leads():
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (data['nome'], data.get('telefone',''), data.get('email',''), data.get('cpf',''),
          data.get('origem','Direto'), data.get('tipo_interesse','Lancamento'),
-         data.get('empreendimento_id'), data.get('status','Novo'),
+         data.get('empreendimento_id'), _garantir_status_lead(conn, data.get('status','Novo'))[0],
          data.get('temperatura','Frio'), data.get('valor_interesse'),
          data.get('observacoes',''), data.get('utm_source',''),
          data.get('utm_medium',''), data.get('utm_campaign',''),
          session['user_id']))
     conn.commit(); conn.close()
     return jsonify({'success': True})
+
+def _alterar_arquivamento(conn, ids, arquivar, motivo=''):
+    """Arquiva ou desarquiva leads e registra a acao no historico de cada um.
+    Arquivar nao apaga nada e nao muda opt-in/opt-out: so tira o lead das listas e das campanhas."""
+    ids = sorted({int(i) for i in ids if str(i).isdigit()})
+    motivo = ' '.join(str(motivo or '').split())[:200]
+    alterados = 0
+    for i in range(0, len(ids), 400):
+        bloco = ids[i:i + 400]
+        marcas = ','.join('?' * len(bloco))
+        alvo = 0 if arquivar else 1
+        rows = conn.execute(
+            f"SELECT id FROM leads WHERE id IN ({marcas}) AND COALESCE(arquivado, 0)=?", bloco + [alvo]
+        ).fetchall()
+        for r in rows:
+            if arquivar:
+                conn.execute(
+                    "UPDATE leads SET arquivado=1, arquivado_em=CURRENT_TIMESTAMP, motivo_arquivamento=? WHERE id=?",
+                    (motivo, r['id']),
+                )
+            else:
+                conn.execute(
+                    "UPDATE leads SET arquivado=0, arquivado_em=NULL, motivo_arquivamento=NULL WHERE id=?", (r['id'],)
+                )
+            conn.execute(
+                "INSERT INTO interacoes (lead_id, tipo, descricao, concluido, usuario_id) VALUES (?,?,?,1,?)",
+                (r['id'], 'Nota',
+                 ('Lead arquivado' + (f': {motivo}' if motivo else '')) if arquivar else 'Lead desarquivado',
+                 session.get('user_id')),
+            )
+            alterados += 1
+    return alterados
+
+
+@app.route('/api/leads/<int:id>/arquivar', methods=['POST'])
+@login_required
+def arquivar_lead(id):
+    motivo = (request.get_json(silent=True) or {}).get('motivo', '')
+    conn = get_db()
+    try:
+        if not conn.execute("SELECT 1 FROM leads WHERE id=?", (id,)).fetchone():
+            return jsonify({'success': False, 'error': 'Lead não encontrado'}), 404
+        n = _alterar_arquivamento(conn, [id], True, motivo)
+        conn.commit()
+        return jsonify({'success': True, 'alterados': n})
+    finally:
+        conn.close()
+
+
+@app.route('/api/leads/<int:id>/desarquivar', methods=['POST'])
+@login_required
+def desarquivar_lead(id):
+    conn = get_db()
+    try:
+        if not conn.execute("SELECT 1 FROM leads WHERE id=?", (id,)).fetchone():
+            return jsonify({'success': False, 'error': 'Lead não encontrado'}), 404
+        n = _alterar_arquivamento(conn, [id], False)
+        conn.commit()
+        return jsonify({'success': True, 'alterados': n})
+    finally:
+        conn.close()
+
+
+@app.route('/api/leads/arquivar-lote', methods=['POST'])
+@login_required
+def arquivar_leads_em_lote():
+    data = request.get_json(silent=True) or {}
+    ids = data.get('ids')
+    acao = str(data.get('acao') or 'arquivar')
+    if acao not in ('arquivar', 'desarquivar'):
+        return jsonify({'success': False, 'error': "acao deve ser 'arquivar' ou 'desarquivar'"}), 400
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'success': False, 'error': 'Selecione ao menos um lead.'}), 400
+    if len(ids) > 2000:
+        return jsonify({'success': False, 'error': 'Limite de 2.000 leads por vez.'}), 400
+    conn = get_db()
+    try:
+        n = _alterar_arquivamento(conn, ids, acao == 'arquivar', data.get('motivo', ''))
+        conn.commit()
+        return jsonify({'success': True, 'alterados': n, 'ignorados': len(set(map(str, ids))) - n})
+    finally:
+        conn.close()
+
 
 @app.route('/api/leads/<int:id>', methods=['GET', 'PUT', 'DELETE'])
 @login_required
@@ -691,7 +873,7 @@ def lead_detail(id):
             valor_interesse=?,observacoes=?,atualizado_em=CURRENT_TIMESTAMP WHERE id=?''',
             (data['nome'], data.get('telefone',''), data.get('email',''), data.get('cpf',''),
              data.get('origem',''), data.get('tipo_interesse','Lancamento'),
-             data.get('empreendimento_id'), data.get('status','Novo'),
+             data.get('empreendimento_id'), _garantir_status_lead(conn, data.get('status','Novo'))[0],
              data.get('temperatura','Frio'), data.get('valor_interesse'),
              data.get('observacoes',''), id))
         conn.commit(); conn.close()
@@ -846,7 +1028,7 @@ def add_interacao(lead_id):
     # Atualizar status do lead se necessário
     if data.get('novo_status'):
         conn.execute('UPDATE leads SET status=?,atualizado_em=CURRENT_TIMESTAMP WHERE id=?',
-                     (data['novo_status'], lead_id))
+                     (_garantir_status_lead(conn, data['novo_status'])[0], lead_id))
     conn.commit(); conn.close()
     return jsonify({'success': True})
 
@@ -1217,159 +1399,21 @@ def campanhas_whatsapp():
                 )
             }), 400
 
-        media_path = data.get(
-            'media_path'
-        )
-
-        media_name = data.get(
-            'media_name'
-        )
-
-        media_type = data.get(
-            'media_type'
-        )
-
-        media_mimetype = data.get(
-            'media_mimetype'
-        )
-
-        media_caption = data.get(
-            'media_caption'
-        )
-
-        media_path = (
-            str(media_path).strip()
-            if media_path
-            else None
-        )
-
-        media_name = (
-            str(media_name).strip()
-            if media_name
-            else None
-        )
-
-        media_type = (
-            str(media_type).strip().lower()
-            if media_type
-            else None
-        )
-
-        media_mimetype = (
-            str(media_mimetype).strip().lower()
-            if media_mimetype
-            else None
-        )
-
-        media_caption = (
-            str(media_caption)
-            if media_caption is not None
-            else None
-        )
-
-        if media_path:
-
-            media_root_resolvido = (
-                MEDIA_ROOT.resolve()
-            )
-
-            caminho_recebido = Path(
-                media_path
-            )
-
-            if caminho_recebido.is_absolute():
-
-                caminho_midia = (
-                    caminho_recebido.resolve()
-                )
-
-            else:
-
-                caminho_midia = (
-                    (
-                        media_root_resolvido
-                        / caminho_recebido
-                    ).resolve()
-                )
-
-                if not caminho_midia.is_file():
-
-                    caminho_por_nome = (
-                        (
-                            media_root_resolvido
-                            / caminho_recebido.name
-                        ).resolve()
-                    )
-
-                    if caminho_por_nome.is_file():
-
-                        caminho_midia = (
-                            caminho_por_nome
-                        )
-
-            try:
-
-                caminho_midia.relative_to(
-                    media_root_resolvido
-                )
-
-            except ValueError:
-
-                return jsonify({
-                    'success': False,
-                    'error': 'media_path inválido'
-                }), 400
-
-            if not caminho_midia.is_file():
-
-                return jsonify({
-                    'success': False,
-                    'error': (
-                        'arquivo de mídia '
-                        'não encontrado'
-                    )
-                }), 400
-
-            media_path = str(
-                caminho_midia.relative_to(
-                    media_root_resolvido
-                )
-            )
-
-            if media_type not in ALLOWED_MEDIA:
-
-                return jsonify({
-                    'success': False,
-                    'error': 'media_type inválido'
-                }), 400
-
-            mimetypes_permitidos = (
-                ALLOWED_MEDIA[
-                    media_type
-                ]
-            )
-
-            if (
-                media_mimetype
-                not in mimetypes_permitidos
-            ):
-
-                return jsonify({
-                    'success': False,
-                    'error': (
-                        'media_mimetype '
-                        'incompatível com '
-                        'media_type'
-                    )
-                }), 400
-
-        else:
-
-            media_path = None
-            media_name = None
-            media_type = None
-            media_mimetype = None
-            media_caption = None
+        midias_in = data.get('midias')
+        if midias_in is None and data.get('media_path'):
+            midias_in = [{
+                'media_path': data.get('media_path'),
+                'media_name': data.get('media_name'),
+                'media_type': data.get('media_type'),
+                'media_mimetype': data.get('media_mimetype'),
+                'legenda': data.get('media_caption'),
+            }]
+        midias, erro_midia = _validar_midias(midias_in)
+        if erro_midia:
+            return jsonify({'success': False, 'error': erro_midia}), 400
+        botoes_json, erro_botoes = _validar_botoes(data.get('botoes'), conn)
+        if erro_botoes:
+            return jsonify({'success': False, 'error': erro_botoes}), 400
 
         conn.execute(
             """
@@ -1380,15 +1424,9 @@ def campanhas_whatsapp():
                 status,
                 total_contatos,
                 intervalo_segundos,
-                media_path,
-                media_name,
-                media_type,
-                media_mimetype,
-                media_caption
+                botoes
             )
-            VALUES(
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-            )
+            VALUES(?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 nome_campanha,
@@ -1397,11 +1435,7 @@ def campanhas_whatsapp():
                 'Rascunho',
                 len(contatos),
                 intervalo_segundos,
-                media_path,
-                media_name,
-                media_type,
-                media_mimetype,
-                media_caption
+                botoes_json
             )
         )
 
@@ -1449,19 +1483,21 @@ def campanhas_whatsapp():
                 )
             )
 
+        _salvar_midias(conn, campanha_id, midias)
         conn.commit()
 
         return jsonify({
             'success': True,
             'id': campanha_id,
             'status': 'Rascunho',
+            'midias': len(midias),
             'media': {
-                'path': media_path,
-                'name': media_name,
-                'type': media_type,
-                'mimetype': media_mimetype,
-                'caption': media_caption,
-            } if media_path else None
+                'path': midias[0]['media_path'],
+                'name': midias[0]['media_name'],
+                'type': midias[0]['media_type'],
+                'mimetype': midias[0]['media_mimetype'],
+                'caption': midias[0]['legenda'] or None,
+            } if midias else None
         })
 
     except Exception:
@@ -1561,7 +1597,8 @@ def iniciar_campanha(id):
                 whatsapp_opt_in,
                 whatsapp_opt_in_source,
                 whatsapp_opt_in_at,
-                whatsapp_opt_out
+                whatsapp_opt_out,
+                COALESCE(arquivado, 0) AS arquivado
             FROM leads
             WHERE telefone IS NOT NULL
               AND telefone <> ''
@@ -1595,6 +1632,10 @@ def iniciar_campanha(id):
                     telefone
                 ] = lead
 
+        midias = _midias_da_campanha(conn, campanha)
+        botoes = _botoes_da_campanha(campanha)
+        if not str(campanha['mensagem'] or '').strip() and not midias:
+            return jsonify({'success': False, 'error': 'A campanha não tem mensagem nem mídia.'}), 400
         enfileirados = 0
         bloqueados = 0
         erros = 0
@@ -1666,6 +1707,16 @@ def iniciar_campanha(id):
                 bloqueados += 1
                 continue
 
+            if lead['arquivado']:
+
+                conn.execute(
+                    "UPDATE contatos_whatsapp SET status=?, erro_msg=? WHERE id=?",
+                    ('Bloqueado', 'Lead arquivado', contato['id'])
+                )
+
+                bloqueados += 1
+                continue
+
             if (
                 not lead['whatsapp_opt_in']
                 or lead['whatsapp_opt_out']
@@ -1711,124 +1762,69 @@ def iniciar_campanha(id):
                 opt_out=False
             )
 
-            mensagem = str(
-                campanha['mensagem']
-                or ''
-            )
-
             nome = str(
                 contato['nome']
                 or lead['nome']
                 or ''
             )
-
-            mensagem = mensagem.replace(
-                '{{nome}}',
+            envios = _montar_envios(
+                campanha,
+                midias,
+                botoes,
                 nome
             )
-
+            grupo = f"c{id}-k{contato['id']}-{uuid.uuid4().hex[:8]}"
+            ids_fila = []
+            erro_envio = None
+            recusa = None
             try:
-
-                resultado = safe_enqueue(
-                    phone=telefone,
-                    message=mensagem,
-                    require_active=False,
-                    send_mode='campaign',
-                    media_path=(
-                        campanha['media_path']
-                        if 'media_path'
-                        in campanha.keys()
-                        else None
-                    ),
-                    media_name=(
-                        campanha['media_name']
-                        if 'media_name'
-                        in campanha.keys()
-                        else None
-                    ),
-                    media_type=(
-                        campanha['media_type']
-                        if 'media_type'
-                        in campanha.keys()
-                        else None
-                    ),
-                    media_mimetype=(
-                        campanha['media_mimetype']
-                        if 'media_mimetype'
-                        in campanha.keys()
-                        else None
-                    ),
-                    media_caption=(
-                        campanha['media_caption']
-                        if 'media_caption'
-                        in campanha.keys()
-                        else None
+                for envio in envios:
+                    m = envio['midia']
+                    resultado = safe_enqueue(
+                        phone=telefone,
+                        message=envio['message'],
+                        require_active=False,
+                        send_mode='campaign',
+                        media_path=m['media_path'] if m else None,
+                        media_name=m['media_name'] if m else None,
+                        media_type=m['media_type'] if m else None,
+                        media_mimetype=m['media_mimetype'] if m else None,
+                        media_caption=envio['caption'] if m else None,
+                        group_key=grupo
                     )
-                )
-
+                    if not resultado.get('accepted'):
+                        recusa = resultado.get('reason', 'bloqueado')
+                        break
+                    ids_fila.append(resultado.get('queue_id'))
             except Exception as exc:
-
+                erro_envio = str(exc)[:500]
+            if erro_envio is not None or recusa is not None:
+                if ids_fila:
+                    cancel_pending(ids_fila)   # nao deixa envio parcial para tras
                 conn.execute(
-                    """
-                    UPDATE contatos_whatsapp
-                    SET
-                        status=?,
-                        erro_msg=?
-                    WHERE id=?
-                    """,
+                    "UPDATE contatos_whatsapp SET status=?, erro_msg=? WHERE id=?",
                     (
-                        'Erro',
-                        str(exc)[:500],
+                        'Erro' if erro_envio is not None else 'Bloqueado',
+                        erro_envio if erro_envio is not None else recusa,
                         contato['id']
                     )
                 )
-
-                erros += 1
+                if erro_envio is not None:
+                    erros += 1
+                else:
+                    bloqueados += 1
                 continue
-
-            if resultado.get(
-                'accepted'
-            ):
-
+            conn.execute(
+                "UPDATE contatos_whatsapp SET status=?, erro_msg=NULL, queue_id=? WHERE id=?",
+                ('Enfileirado', ids_fila[0], contato['id'])
+            )
+            conn.execute("DELETE FROM contato_fila WHERE contato_id=?", (contato['id'],))
+            for ordem, qid in enumerate(ids_fila, start=1):
                 conn.execute(
-                    """
-                    UPDATE contatos_whatsapp
-                    SET
-                        status=?,
-                        erro_msg=NULL,
-                        queue_id=?
-                    WHERE id=?
-                    """,
-                    (
-                        'Enfileirado',
-                        resultado.get('queue_id'),
-                        contato['id']
-                    )
+                    "INSERT INTO contato_fila (contato_id, queue_id, ordem) VALUES (?,?,?)",
+                    (contato['id'], qid, ordem)
                 )
-
-                enfileirados += 1
-
-            else:
-
-                conn.execute(
-                    """
-                    UPDATE contatos_whatsapp
-                    SET
-                        status=?,
-                        erro_msg=?
-                    WHERE id=?
-                    """,
-                    (
-                        'Bloqueado',
-                        resultado.get(
-                            'reason',
-                            'bloqueado'
-                        ),
-                        contato['id']
-                    )
-                )
-
-                bloqueados += 1
+            enfileirados += 1
 
         novo_status = (
             'Enfileirada'
@@ -1877,9 +1873,216 @@ def iniciar_campanha(id):
         conn.close()
 
 
+_MAX_MIDIAS = 5
+_MAX_BOTOES = 5
+_ACOES_BOTAO = ('registrar', 'status', 'optout')
+_CABECALHO_BOTOES = 'Responda com o número:'
+_ACK_ENTREGUE = ('DELIVERY_ACK', 'DELIVERED', 'READ', 'PLAYED')
+
+
+def _resolver_midia(media_path, media_type, media_mimetype):
+    """Valida uma midia ja enviada ao servidor. Devolve (caminho_relativo, erro)."""
+    media_path = str(media_path or '').strip()
+    media_type = str(media_type or '').strip().lower()
+    media_mimetype = str(media_mimetype or '').strip().lower()
+    if not media_path:
+        return None, 'media_path inválido'
+    raiz = MEDIA_ROOT.resolve()
+    recebido = Path(media_path)
+    if recebido.is_absolute():
+        caminho = recebido.resolve()
+    else:
+        caminho = (raiz / recebido).resolve()
+        if not caminho.is_file():
+            por_nome = (raiz / recebido.name).resolve()
+            if por_nome.is_file():
+                caminho = por_nome
+    try:
+        caminho.relative_to(raiz)
+    except ValueError:
+        return None, 'media_path inválido'
+    if not caminho.is_file():
+        return None, 'arquivo de mídia não encontrado'
+    if media_type not in ALLOWED_MEDIA:
+        return None, 'media_type inválido'
+    if media_mimetype not in ALLOWED_MEDIA[media_type]:
+        return None, 'media_mimetype incompatível com media_type'
+    return str(caminho.relative_to(raiz)), None
+
+
+def _validar_midias(lista):
+    """Normaliza a lista de midias da campanha. Devolve (midias, erro)."""
+    if lista is None:
+        return [], None
+    if not isinstance(lista, list):
+        return None, 'midias deve ser uma lista'
+    if len(lista) > _MAX_MIDIAS:
+        return None, f'No máximo {_MAX_MIDIAS} mídias por campanha'
+    saida = []
+    for i, m in enumerate(lista, start=1):
+        if not isinstance(m, dict):
+            return None, f'Mídia {i}: formato inválido'
+        rel, erro = _resolver_midia(m.get('media_path'), m.get('media_type'), m.get('media_mimetype'))
+        if erro:
+            return None, f'Mídia {i}: {erro}'
+        legenda = m.get('legenda', m.get('media_caption'))
+        saida.append({
+            'media_path': rel,
+            'media_name': str(m.get('media_name') or Path(rel).name)[:200],
+            'media_type': str(m['media_type']).strip().lower(),
+            'media_mimetype': str(m['media_mimetype']).strip().lower(),
+            'legenda': str(legenda).strip()[:1024] if legenda else '',
+        })
+    return saida, None
+
+
+def _validar_botoes(botoes, conn):
+    """Valida os botoes de resposta rapida. Devolve (json | None, erro)."""
+    if not botoes:
+        return None, None
+    if isinstance(botoes, list):
+        botoes = {'itens': botoes}
+    if not isinstance(botoes, dict):
+        return None, 'botoes inválidos'
+    itens_in = botoes.get('itens') or []
+    if not itens_in:
+        return None, None
+    if len(itens_in) > _MAX_BOTOES:
+        return None, f'No máximo {_MAX_BOTOES} botões'
+    existentes = _status_existentes(conn)
+    itens = []
+    for i, b in enumerate(itens_in, start=1):
+        b = b if isinstance(b, dict) else {}
+        texto = ' '.join(str(b.get('texto') or '').split())[:60]
+        if not texto:
+            return None, f'Botão {i}: informe o texto'
+        acao = str(b.get('acao') or 'registrar')
+        if acao not in _ACOES_BOTAO:
+            return None, f'Botão {i}: ação inválida'
+        valor = ''
+        if acao == 'status':
+            chave = _token_texto(b.get('valor'))
+            if chave not in existentes:
+                return None, f'Botão {i}: escolha um status existente'
+            valor = existentes[chave]
+        itens.append({'texto': texto, 'acao': acao, 'valor': valor})
+    cabecalho = ' '.join(str(botoes.get('cabecalho') or _CABECALHO_BOTOES).split())[:100]
+    return json.dumps({'cabecalho': cabecalho, 'itens': itens}, ensure_ascii=False), None
+
+
+def _botoes_da_campanha(campanha):
+    try:
+        bruto = campanha['botoes'] if 'botoes' in campanha.keys() else None
+        dados = json.loads(bruto) if bruto else None
+    except (ValueError, TypeError):
+        dados = None
+    return dados if isinstance(dados, dict) and dados.get('itens') else None
+
+
+def _texto_botoes(botoes):
+    if not botoes:
+        return ''
+    linhas = [botoes.get('cabecalho') or _CABECALHO_BOTOES]
+    linhas += [f"{i}) {b['texto']}" for i, b in enumerate(botoes['itens'], start=1)]
+    return '\n\n' + '\n'.join(linhas)
+
+
+def _midias_da_campanha(conn, campanha):
+    rows = conn.execute(
+        "SELECT media_path, media_name, media_type, media_mimetype, legenda "
+        "FROM campanha_midias WHERE campanha_id=? ORDER BY ordem, id",
+        (campanha['id'],),
+    ).fetchall()
+    if rows:
+        return [dict(r) for r in rows]
+    if campanha['media_path']:   # campanhas antigas: uma midia nas colunas da propria campanha
+        return [{
+            'media_path': campanha['media_path'], 'media_name': campanha['media_name'],
+            'media_type': campanha['media_type'], 'media_mimetype': campanha['media_mimetype'],
+            'legenda': campanha['media_caption'] or '',
+        }]
+    return []
+
+
+def _salvar_midias(conn, campanha_id, midias):
+    conn.execute("DELETE FROM campanha_midias WHERE campanha_id=?", (campanha_id,))
+    for ordem, m in enumerate(midias, start=1):
+        conn.execute(
+            "INSERT INTO campanha_midias (campanha_id, ordem, media_path, media_name, media_type, media_mimetype, legenda) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (campanha_id, ordem, m['media_path'], m['media_name'], m['media_type'], m['media_mimetype'], m['legenda']),
+        )
+    p = midias[0] if midias else None   # a primeira midia tambem fica nas colunas antigas (compatibilidade)
+    conn.execute(
+        "UPDATE mensagens_whatsapp SET media_path=?, media_name=?, media_type=?, media_mimetype=?, media_caption=? WHERE id=?",
+        (p['media_path'] if p else None, p['media_name'] if p else None, p['media_type'] if p else None,
+         p['media_mimetype'] if p else None, (p['legenda'] or None) if p else None, campanha_id),
+    )
+
+
+def _montar_envios(campanha, midias, botoes, nome):
+    """Sequencia de envios de UM contato.
+    0 midia: texto (+ opcoes). 1 midia: legenda (ou o texto) + opcoes na propria midia.
+    2+ midias: cada midia com sua legenda e, no fim, o texto (+ opcoes)."""
+    msg = _aplicar_variaveis_mensagem(str(campanha['mensagem'] or ''), nome)
+    opcoes = _texto_botoes(botoes)
+    if not midias:
+        return [{'message': (msg + opcoes).strip(), 'midia': None, 'caption': None}]
+    if len(midias) == 1:
+        m = midias[0]
+        legenda = _aplicar_variaveis_mensagem(m['legenda'], nome) if m['legenda'] else ''
+        corpo = ((legenda or msg) + opcoes).strip()
+        return [{'message': corpo, 'midia': m, 'caption': corpo}]
+    envios = []
+    for m in midias:
+        legenda = _aplicar_variaveis_mensagem(m['legenda'], nome) if m['legenda'] else ''
+        envios.append({'message': legenda, 'midia': m, 'caption': legenda})
+    final = (msg + opcoes).strip()
+    if final:
+        envios.append({'message': final, 'midia': None, 'caption': None})
+    return envios
+
+
+def _ids_fila_da_campanha(conn, campanha_id, status_contato=None):
+    """Todos os itens da fila ligados aos contatos da campanha (um ou varios por contato)."""
+    filtro, params = '', [campanha_id]
+    if status_contato:
+        filtro = ' AND ct.status IN (' + ','.join('?' * len(status_contato)) + ')'
+        params += list(status_contato)
+    ids = set()
+    for r in conn.execute(
+        'SELECT ct.queue_id AS q FROM contatos_whatsapp ct WHERE ct.campanha_id=? AND ct.queue_id IS NOT NULL' + filtro, params
+    ).fetchall():
+        ids.add(r['q'])
+    for r in conn.execute(
+        'SELECT cf.queue_id AS q FROM contato_fila cf JOIN contatos_whatsapp ct ON ct.id=cf.contato_id WHERE ct.campanha_id=?' + filtro, params
+    ).fetchall():
+        ids.add(r['q'])
+    return sorted(ids)
+
+
+def _fila_por_ids(ids):
+    """{queue_id: linha} lendo a Safe Queue em blocos (limite de variaveis do SQLite)."""
+    resultado = {}
+    fila_conn = safe_queue_connect()
+    try:
+        ids = list(ids)
+        for i in range(0, len(ids), 400):
+            bloco = ids[i:i + 400]
+            marcas = ",".join("?" * len(bloco))
+            for r in fila_conn.execute(
+                "SELECT id, status, delivery_status, error, reason, sent_at, evolution_message_id "
+                "FROM queue WHERE id IN (" + marcas + ")", bloco,
+            ).fetchall():
+                resultado[r["id"]] = r
+    finally:
+        fila_conn.close()
+    return resultado
+
+
 def _sincronizar_status_campanhas(conn, campanha_id=None):
     """Reflete no CRM o que a Safe Queue ja fez (enviado, entregue, erro, bloqueio).
-    Sem isso o contato ficava para sempre como 'Enfileirado'.
+    Um contato pode ter varios itens na fila (varias midias + texto): o status e o conjunto deles.
     Simulacoes (DRY-RUN) nao contam como envio."""
     sql = (
         "SELECT id, campanha_id, queue_id FROM contatos_whatsapp "
@@ -1893,41 +2096,40 @@ def _sincronizar_status_campanhas(conn, campanha_id=None):
     if not abertos:
         return 0
 
-    ids = [a["queue_id"] for a in abertos]
-    fila_conn = safe_queue_connect()
-    try:
-        marcas = ",".join("?" * len(ids))
-        fila = {
-            r["id"]: r
-            for r in fila_conn.execute(
-                "SELECT id, status, delivery_status, error, reason, sent_at, "
-                "evolution_message_id FROM queue WHERE id IN (" + marcas + ")",
-                ids,
-            ).fetchall()
-        }
-    finally:
-        fila_conn.close()
+    por_contato = {a["id"]: [a["queue_id"]] for a in abertos}
+    ids_contatos = list(por_contato)
+    for i in range(0, len(ids_contatos), 400):
+        bloco = ids_contatos[i:i + 400]
+        marcas = ",".join("?" * len(bloco))
+        for r in conn.execute(
+            "SELECT contato_id, queue_id FROM contato_fila WHERE contato_id IN (" + marcas + ") ORDER BY ordem",
+            bloco,
+        ).fetchall():
+            if r["queue_id"] not in por_contato[r["contato_id"]]:
+                por_contato[r["contato_id"]].append(r["queue_id"])
+    fila = _fila_por_ids({q for lista in por_contato.values() for q in lista})
 
     alterados = 0
     campanhas = set()
     for a in abertos:
-        q = fila.get(a["queue_id"])
-        if not q:
+        itens = [fila.get(q) for q in por_contato[a["id"]]]
+        if any(i is None for i in itens):
             continue
+        estados = [i["status"] for i in itens]
         erro = None
         enviado_em = None
-        if q["status"] == "sent":
-            if str(q["evolution_message_id"] or "").startswith("DRY-RUN"):
+        if "failed" in estados:
+            novo = "Erro"
+            erro = next(i["error"] for i in itens if i["status"] == "failed")
+        elif "blocked" in estados:
+            novo = "Bloqueado"
+            erro = next(i["reason"] for i in itens if i["status"] == "blocked")
+        elif all(e == "sent" for e in estados):
+            if any(str(i["evolution_message_id"] or "").startswith("DRY-RUN") for i in itens):
                 continue
-            entregue = str(q["delivery_status"] or "").upper() in (
-                "DELIVERY_ACK", "DELIVERED", "READ", "PLAYED"
-            )
+            entregue = all(str(i["delivery_status"] or "").upper() in _ACK_ENTREGUE for i in itens)
             novo = "Entregue" if entregue else "Enviado"
-            enviado_em = q["sent_at"]
-        elif q["status"] == "failed":
-            novo, erro = "Erro", q["error"]
-        elif q["status"] == "blocked":
-            novo, erro = "Bloqueado", q["reason"]
+            enviado_em = max((i["sent_at"] for i in itens if i["sent_at"]), default=None)
         else:
             continue
         cur = conn.execute(
@@ -1966,6 +2168,399 @@ def _sincronizar_seguro(conn, campanha_id=None):
     except Exception as exc:
         print("Aviso: falha ao sincronizar status com a Safe Queue:", exc)
         return 0
+
+
+_VARIAVEL_NOME = _re.compile(
+    r'\{\{?\s*(nome|primeiro_nome)\s*(?:\|\s*([^{}|]*?)\s*)?\}\}?',
+    _re.IGNORECASE,
+)
+_PARTICULAS_NOME = {'da', 'de', 'do', 'das', 'dos', 'e'}
+
+
+def _nome_amigavel(nome):
+    """Nome pronto para mensagem: 'JOAO DA SILVA' ou 'joao da silva' viram 'Joao da Silva'."""
+    nome = ' '.join(str(nome or '').split())
+    if nome and (nome.isupper() or nome.islower()):
+        partes = nome.split(' ')
+        nome = ' '.join(
+            p.lower() if (i and p.lower() in _PARTICULAS_NOME) else p.capitalize()
+            for i, p in enumerate(partes)
+        )
+    return nome
+
+
+def _aplicar_variaveis_mensagem(texto, nome):
+    """Troca {nome}, {{nome}}, {primeiro_nome} e {nome|texto reserva} pelo nome do contato.
+    Sem nome, usa o texto reserva (se houver) ou remove a variavel arrumando a pontuacao."""
+    texto = str(texto or '')
+    completo = _nome_amigavel(nome)
+    primeiro = completo.split(' ')[0] if completo else ''
+    ficou_vazio = False
+
+    def trocar(m):
+        nonlocal ficou_vazio
+        valor = completo if m.group(1).lower() == 'nome' else primeiro
+        if not valor:
+            valor = (m.group(2) or '').strip()
+        if not valor:
+            ficou_vazio = True
+        return valor
+
+    resultado = _VARIAVEL_NOME.sub(trocar, texto)
+    if ficou_vazio:
+        resultado = _re.sub(r'[ \t]{2,}', ' ', resultado)
+        resultado = _re.sub(r'[ \t]+([,.!?;:])', r'\1', resultado)
+        resultado = _re.sub(r'([,;:])\s*\1', r'\1', resultado)
+        resultado = _re.sub(r'([,;:])\s*([.!?])', r'\2', resultado)
+    return resultado
+
+
+@app.route('/api/whatsapp/previa', methods=['POST'])
+@login_required
+def previa_mensagem_whatsapp():
+    data = request.get_json(silent=True) or {}
+    return jsonify({
+        'success': True,
+        'texto': _aplicar_variaveis_mensagem(data.get('texto'), data.get('nome')),
+    })
+
+
+@app.route('/api/whatsapp/modelos', methods=['GET'])
+@login_required
+def listar_modelos_mensagem():
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, nome, texto FROM modelos_mensagem ORDER BY nome COLLATE NOCASE"
+        ).fetchall()
+        return jsonify([dict(r) for r in rows])
+    finally:
+        conn.close()
+
+
+@app.route('/api/whatsapp/modelos', methods=['POST'])
+@login_required
+def salvar_modelo_mensagem():
+    """Cria o modelo ou, se ja existir um com o mesmo nome, atualiza o texto."""
+    data = request.get_json(silent=True) or {}
+    nome = str(data.get('nome') or '').strip()
+    texto = str(data.get('texto') or '').strip()
+    if not nome or len(nome) > 100:
+        return jsonify({'success': False, 'error': 'Informe um nome de até 100 caracteres.'}), 400
+    if not texto or len(texto) > 4096:
+        return jsonify({'success': False, 'error': 'A mensagem deve ter de 1 a 4096 caracteres.'}), 400
+    conn = get_db()
+    try:
+        atual = conn.execute(
+            "SELECT id FROM modelos_mensagem WHERE nome=?", (nome,)
+        ).fetchone()
+        if atual:
+            conn.execute(
+                "UPDATE modelos_mensagem SET texto=?, atualizado_em=CURRENT_TIMESTAMP WHERE id=?",
+                (texto, atual['id']),
+            )
+            conn.commit()
+            return jsonify({'success': True, 'id': atual['id'], 'atualizado': True})
+        cur = conn.execute(
+            "INSERT INTO modelos_mensagem (nome, texto) VALUES (?, ?)", (nome, texto)
+        )
+        conn.commit()
+        return jsonify({'success': True, 'id': cur.lastrowid, 'atualizado': False})
+    finally:
+        conn.close()
+
+
+@app.route('/api/whatsapp/modelos/<int:id>', methods=['DELETE'])
+@login_required
+def excluir_modelo_mensagem(id):
+    conn = get_db()
+    try:
+        n = conn.execute("DELETE FROM modelos_mensagem WHERE id=?", (id,)).rowcount
+        conn.commit()
+        if not n:
+            return jsonify({'success': False, 'error': 'Modelo não encontrado'}), 404
+        return jsonify({'success': True})
+    finally:
+        conn.close()
+
+
+def _json_ou_none(texto):
+    try:
+        return json.loads(texto) if texto else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _registrar_edicao(camp, alteracoes):
+    """Guarda o que mudou numa campanha ja enviada (auditoria). Mantem as 20 ultimas."""
+    log = _json_ou_none(camp['edicoes_log'] if 'edicoes_log' in camp.keys() else None) or []
+    log.append({'em': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'usuario_id': session.get('user_id'), 'alteracoes': alteracoes})
+    return json.dumps(log[-20:], ensure_ascii=False)
+
+
+@app.route('/api/whatsapp/campanhas/<int:id>', methods=['PUT'])
+@login_required
+def editar_campanha(id):
+    """Edita a campanha.
+    Rascunho: tudo (inclusive a lista de contatos).
+    Ja iniciada/concluida: nome, mensagem, midias, botoes, intervalo e adicionar_contatos. O que
+    foi enviado nao muda; as alteracoes valem para os proximos envios e ficam registradas.
+    Enfileirada/Enviando: so o nome."""
+    data = request.get_json(silent=True) or {}
+    conn = get_db()
+    try:
+        camp = conn.execute("SELECT * FROM mensagens_whatsapp WHERE id=?", (id,)).fetchone()
+        if not camp:
+            return jsonify({'success': False, 'error': 'Campanha não encontrada'}), 404
+        status = camp['status']
+        so_conteudo = ('mensagem', 'midias', 'botoes', 'intervalo_segundos', 'contatos', 'adicionar_contatos')
+        if status in ('Enfileirada', 'Enviando') and any(k in data for k in so_conteudo):
+            return jsonify({'success': False, 'error': 'Campanha em envio: agora só o nome pode ser alterado.'}), 409
+        if 'contatos' in data and status != 'Rascunho':
+            return jsonify({'success': False, 'error': 'Campanha já iniciada: use adicionar_contatos para incluir novos contatos.'}), 409
+
+        sets, params, alteracoes = [], [], {}
+        if 'nome_campanha' in data:
+            nome = str(data['nome_campanha'] or '').strip()
+            if not nome:
+                return jsonify({'success': False, 'error': 'Nome da campanha é obrigatório'}), 400
+            if nome != camp['nome_campanha']:
+                sets.append('nome_campanha=?'); params.append(nome[:200])
+                alteracoes['nome_campanha'] = {'de': camp['nome_campanha'], 'para': nome[:200]}
+        mensagem_final = str(camp['mensagem'] or '')
+        if 'mensagem' in data:
+            mensagem_final = str(data['mensagem'] or '').strip()
+            if len(mensagem_final) > 4096:
+                return jsonify({'success': False, 'error': 'A mensagem deve ter até 4096 caracteres.'}), 400
+            if mensagem_final != (camp['mensagem'] or ''):
+                sets.append('mensagem=?'); params.append(mensagem_final)
+                alteracoes['mensagem'] = {'de': camp['mensagem'], 'para': mensagem_final}
+        midias_atuais = _midias_da_campanha(conn, camp)
+        midias_novas = None
+        if 'midias' in data:
+            midias_novas, erro = _validar_midias(data['midias'])
+            if erro:
+                return jsonify({'success': False, 'error': erro}), 400
+            if [m['media_path'] + '|' + m['legenda'] for m in midias_novas] != [m['media_path'] + '|' + (m['legenda'] or '') for m in midias_atuais]:
+                alteracoes['midias'] = {'de': [m['media_name'] for m in midias_atuais], 'para': [m['media_name'] for m in midias_novas]}
+            else:
+                midias_novas = None
+        botoes_json = None
+        if 'botoes' in data:
+            botoes_json, erro = _validar_botoes(data['botoes'], conn)
+            if erro:
+                return jsonify({'success': False, 'error': erro}), 400
+            if (botoes_json or '') != (camp['botoes'] or ''):
+                sets.append('botoes=?'); params.append(botoes_json)
+                alteracoes['botoes'] = {'de': _json_ou_none(camp['botoes']), 'para': _json_ou_none(botoes_json)}
+        if 'intervalo_segundos' in data:
+            try:
+                intervalo = int(data['intervalo_segundos'])
+            except (TypeError, ValueError):
+                return jsonify({'success': False, 'error': 'intervalo_segundos inválido'}), 400
+            if intervalo < 0:
+                return jsonify({'success': False, 'error': 'intervalo_segundos não pode ser negativo'}), 400
+            if intervalo != camp['intervalo_segundos']:
+                sets.append('intervalo_segundos=?'); params.append(intervalo)
+        total_midias = len(midias_novas) if midias_novas is not None else len(midias_atuais)
+        if 'midias' in data and midias_novas is None:
+            total_midias = len(midias_atuais)
+        if not mensagem_final and not total_midias:
+            return jsonify({'success': False, 'error': 'Informe uma mensagem ou ao menos uma mídia.'}), 400
+
+        adicionados = 0
+        existentes_tel = {
+            _normalizar_telefone_br(r['telefone']) or r['telefone']
+            for r in conn.execute("SELECT telefone FROM contatos_whatsapp WHERE campanha_id=?", (id,)).fetchall()
+        }
+        novos = []
+        if 'contatos' in data:
+            if not isinstance(data['contatos'], list) or not data['contatos']:
+                return jsonify({'success': False, 'error': 'Adicione ao menos um contato.'}), 400
+            existentes_tel = set()
+            conn.execute("DELETE FROM contato_fila WHERE contato_id IN (SELECT id FROM contatos_whatsapp WHERE campanha_id=?)", (id,))
+            conn.execute("DELETE FROM contatos_whatsapp WHERE campanha_id=?", (id,))
+            novos = data['contatos']
+            alteracoes['contatos'] = {'para': len(novos)}
+        elif 'adicionar_contatos' in data:
+            novos = data['adicionar_contatos'] if isinstance(data['adicionar_contatos'], list) else []
+        for contato in novos:
+            if not isinstance(contato, dict):
+                continue
+            tel = str(contato.get('telefone', '')).strip()
+            chave = _normalizar_telefone_br(tel) or tel
+            if not tel or chave in existentes_tel:
+                continue
+            existentes_tel.add(chave)
+            conn.execute(
+                "INSERT INTO contatos_whatsapp (campanha_id, nome, telefone) VALUES (?,?,?)",
+                (id, str(contato.get('nome', ''))[:200], tel),
+            )
+            adicionados += 1
+        if 'adicionar_contatos' in data:
+            alteracoes['contatos_adicionados'] = adicionados
+
+        if midias_novas is not None:
+            _salvar_midias(conn, id, midias_novas)
+        if adicionados or 'contatos' in data:
+            total = conn.execute("SELECT COUNT(*) FROM contatos_whatsapp WHERE campanha_id=?", (id,)).fetchone()[0]
+            sets.append('total_contatos=?'); params.append(total)
+            if status in ('Concluido', 'Cancelado', 'Erro') and adicionados:
+                sets.append("status='Rascunho'")   # Iniciar envia so os novos (Pendente)
+        if status != 'Rascunho' and any(k in alteracoes for k in ('mensagem', 'midias', 'botoes')):
+            sets.append('edicoes_log=?'); params.append(_registrar_edicao(camp, alteracoes))
+        if sets:
+            conn.execute('UPDATE mensagens_whatsapp SET ' + ', '.join(sets) + ' WHERE id=?', params + [id])
+        conn.commit()
+        novo_status = conn.execute("SELECT status FROM mensagens_whatsapp WHERE id=?", (id,)).fetchone()['status']
+        return jsonify({'success': True, 'id': id, 'status': novo_status, 'alteracoes': list(alteracoes), 'contatos_adicionados': adicionados})
+    finally:
+        conn.close()
+
+
+@app.route('/api/whatsapp/campanhas/<int:id>/duplicar', methods=['POST'])
+@login_required
+def duplicar_campanha(id):
+    """Cria um novo rascunho com a lista de contatos da campanha (ex.: mensagem de 2o contato).
+    contatos: todos | enviados | entregues | nao_responderam | erros"""
+    data = request.get_json(silent=True) or {}
+    filtros = {
+        'todos': None,
+        'enviados': ('Enviado', 'Entregue'),
+        'entregues': ('Entregue',),
+        'nao_responderam': ('Enviado', 'Entregue'),
+        'erros': ('Erro', 'Bloqueado'),
+    }
+    quais = str(data.get('contatos') or 'todos')
+    if quais not in filtros:
+        return jsonify({'success': False, 'error': 'Filtro de contatos inválido.'}), 400
+    conn = get_db()
+    try:
+        camp = conn.execute("SELECT * FROM mensagens_whatsapp WHERE id=?", (id,)).fetchone()
+        if not camp:
+            return jsonify({'success': False, 'error': 'Campanha não encontrada'}), 404
+        _sincronizar_seguro(conn, id)
+        sql = "SELECT nome, telefone, resposta FROM contatos_whatsapp WHERE campanha_id=?"
+        params = [id]
+        if filtros[quais]:
+            sql += " AND status IN (" + ",".join("?" * len(filtros[quais])) + ")"
+            params += list(filtros[quais])
+        origem = conn.execute(sql + " ORDER BY id", params).fetchall()
+        if quais == 'nao_responderam':
+            origem = [r for r in origem if not (r['resposta'] or '').strip()]
+        vistos, contatos = set(), []
+        for r in origem:
+            chave = _normalizar_telefone_br(r['telefone']) or r['telefone']
+            if chave in vistos:
+                continue
+            vistos.add(chave)
+            contatos.append(r)
+        if not contatos:
+            return jsonify({'success': False, 'error': 'Nenhum contato corresponde ao filtro escolhido.'}), 400
+        nome = str(data.get('nome') or '').strip() or f"Cópia de {camp['nome_campanha']}"
+        manter = lambda k: bool(data.get(k, True))
+        cur = conn.execute(
+            "INSERT INTO mensagens_whatsapp (nome_campanha, mensagem, lista_contatos, status, total_contatos, "
+            "intervalo_segundos, botoes, duplicada_de) VALUES (?,?,?,?,?,?,?,?)",
+            (nome[:200], (camp['mensagem'] or '') if manter('manter_mensagem') else '', '', 'Rascunho', len(contatos),
+             camp['intervalo_segundos'], camp['botoes'] if manter('manter_botoes') else None, id),
+        )
+        novo_id = cur.lastrowid
+        for r in contatos:
+            conn.execute("INSERT INTO contatos_whatsapp (campanha_id, nome, telefone) VALUES (?,?,?)",
+                         (novo_id, r['nome'], r['telefone']))
+        if manter('manter_midias'):
+            _salvar_midias(conn, novo_id, _midias_da_campanha(conn, camp))
+        conn.commit()
+        return jsonify({'success': True, 'id': novo_id, 'contatos': len(contatos), 'status': 'Rascunho'})
+    finally:
+        conn.close()
+
+
+_RE_RESPOSTA_NUM = _re.compile('^\\s*([1-5])(?:\\ufe0f?\\u20e3)?\\s*[).:\\-]?\\s*$')
+
+
+def _variantes_telefone(telefone):
+    """O WhatsApp as vezes entrega o numero sem (ou com) o 9 apos o DDD."""
+    d = _re.sub(r'\D', '', str(telefone or ''))
+    variantes = {d}
+    if len(d) == 12:
+        variantes.add(d[:4] + '9' + d[4:])
+    if len(d) == 13 and d[4] == '9':
+        variantes.add(d[:4] + d[5:])
+    return variantes
+
+
+def _processar_resposta_rapida(conn, phone, texto, message_id=None):
+    """Se `texto` for a resposta (numero ou texto do botao) a uma campanha com botoes enviada
+    ao contato nos ultimos dias, registra a resposta e aplica a acao do botao."""
+    texto = str(texto or '').strip()
+    if not texto:
+        return None
+    if message_id:
+        cur = conn.execute("INSERT OR IGNORE INTO respostas_processadas (message_id) VALUES (?)", (str(message_id),))
+        if not cur.rowcount:
+            return {'duplicada': True}
+    variantes = _variantes_telefone(phone)
+    limite = datetime.now() - timedelta(days=int(os.getenv('CRM_RESPOSTA_JANELA_DIAS', '7')))
+    escolhido = None
+    for r in conn.execute(
+        "SELECT ct.id AS contato_id, ct.campanha_id, ct.telefone, ct.enviado_em, c.nome_campanha, c.botoes "
+        "FROM contatos_whatsapp ct JOIN mensagens_whatsapp c ON c.id=ct.campanha_id "
+        "WHERE c.botoes IS NOT NULL AND c.botoes<>'' AND ct.status IN ('Enviado','Entregue') "
+        "ORDER BY ct.id DESC LIMIT 500"
+    ).fetchall():
+        if (_normalizar_telefone_br(r['telefone']) or '') not in variantes:
+            continue
+        if r['enviado_em']:
+            try:
+                enviado = datetime.fromisoformat(str(r['enviado_em']))
+                if enviado.tzinfo:
+                    enviado = enviado.astimezone().replace(tzinfo=None)
+                if enviado < limite:
+                    continue
+            except ValueError:
+                pass
+        escolhido = r
+        break
+    if not escolhido:
+        return None
+    botoes = _json_ou_none(escolhido['botoes']) or {}
+    itens = botoes.get('itens') or []
+    m = _RE_RESPOSTA_NUM.match(texto)
+    item = None
+    if m and int(m.group(1)) <= len(itens):
+        item = itens[int(m.group(1)) - 1]
+    else:
+        chave = _token_texto(texto)
+        item = next((b for b in itens if _token_texto(b['texto']) == chave), None)
+    if not item:
+        return None
+    conn.execute("UPDATE contatos_whatsapp SET resposta=?, respondido_em=CURRENT_TIMESTAMP WHERE id=?", (item['texto'], escolhido['contato_id']))
+    aplicado = {'campanha_id': escolhido['campanha_id'], 'resposta': item['texto'], 'acao': item['acao'], 'leads': 0}
+    leads = [
+        l for l in conn.execute("SELECT id, nome, telefone FROM leads WHERE telefone IS NOT NULL AND telefone<>''").fetchall()
+        if (_normalizar_telefone_br(l['telefone']) or '') in variantes
+    ]
+    for lead in leads:
+        if item['acao'] == 'status':
+            novo, _criado = _garantir_status_lead(conn, item['valor'])
+            conn.execute("UPDATE leads SET status=?, atualizado_em=CURRENT_TIMESTAMP WHERE id=?", (novo, lead['id']))
+        elif item['acao'] == 'optout':
+            conn.execute(
+                "UPDATE leads SET whatsapp_opt_in=0, whatsapp_opt_out=1, whatsapp_opt_in_source='', "
+                "whatsapp_opt_in_at=NULL, atualizado_em=CURRENT_TIMESTAMP WHERE id=?", (lead['id'],))
+            try:
+                upsert_contact(phone=_normalizar_telefone_br(lead['telefone']), name=lead['nome'] or '', opt_in=False, opt_out=True)
+            except Exception as exc:
+                print('Aviso: não foi possível sincronizar o opt-out na Safe Queue:', exc)
+        conn.execute(
+            "INSERT INTO interacoes (lead_id, tipo, descricao, concluido) VALUES (?,?,?,1)",
+            (lead['id'], 'WhatsApp', f"Resposta rápida: \u201c{item['texto']}\u201d (campanha {escolhido['nome_campanha']})"),
+        )
+        aplicado['leads'] += 1
+    conn.commit()
+    return aplicado
 
 
 def _status_da_fila(queue_ids):
@@ -2016,19 +2611,17 @@ def excluir_campanha(id):
             return jsonify({'success': False, 'error': 'Campanha não encontrada'}), 404
         if camp['status'] == 'Enviando':
             return jsonify({'success': False, 'error': 'Campanha em envio. Aguarde terminar.'}), 409
-        ids = [
-            r['queue_id']
-            for r in conn.execute(
-                "SELECT queue_id FROM contatos_whatsapp WHERE campanha_id=? AND queue_id IS NOT NULL",
-                (id,),
-            ).fetchall()
-        ]
+        ids = _ids_fila_da_campanha(conn, id)
         if 'processing' in _status_da_fila(ids).values():
             return jsonify({
                 'success': False,
                 'error': 'Há envio em andamento nesta campanha. Aguarde ou use a recuperação de itens presos.',
             }), 409
         fila = cancel_pending(ids)
+        conn.execute(
+            "DELETE FROM contato_fila WHERE contato_id IN (SELECT id FROM contatos_whatsapp WHERE campanha_id=?)", (id,)
+        )
+        conn.execute("DELETE FROM campanha_midias WHERE campanha_id=?", (id,))
         removidos = conn.execute(
             "DELETE FROM contatos_whatsapp WHERE campanha_id=?", (id,)
         ).rowcount
@@ -2061,20 +2654,17 @@ def reprocessar_campanha(id):
         if camp['status'] == 'Enviando':
             return jsonify({'success': False, 'error': 'Campanha em envio.'}), 409
         _sincronizar_seguro(conn, id)
-        abertos = [
-            r['queue_id']
-            for r in conn.execute(
-                "SELECT queue_id FROM contatos_whatsapp "
-                "WHERE campanha_id=? AND status='Enfileirado' AND queue_id IS NOT NULL",
-                (id,),
-            ).fetchall()
-        ]
+        abertos = _ids_fila_da_campanha(conn, id, ['Enfileirado'])
         if any(st in ('pending', 'processing') for st in _status_da_fila(abertos).values()):
             return jsonify({
                 'success': False,
                 'error': 'Ainda há itens desta campanha na fila. Aguarde o worker ou recupere os itens presos.',
             }), 409
         marcas = ",".join("?" * len(status_alvo))
+        conn.execute(
+            "DELETE FROM contato_fila WHERE contato_id IN (SELECT id FROM contatos_whatsapp "
+            "WHERE campanha_id=? AND status IN (" + marcas + "))", [id] + status_alvo
+        )
         n = conn.execute(
             "UPDATE contatos_whatsapp SET status='Pendente', erro_msg=NULL, queue_id=NULL "
             "WHERE campanha_id=? AND status IN (" + marcas + ")",
@@ -2132,6 +2722,16 @@ def campanha_status(id):
                 dict(camp)
                 if camp
                 else {}
+            ),
+            'midias': (
+                _midias_da_campanha(conn, camp)
+                if camp
+                else []
+            ),
+            'botoes': (
+                _botoes_da_campanha(camp)
+                if camp
+                else None
             ),
             'contatos': [
                 dict(c)
@@ -2195,7 +2795,8 @@ def whatsapp_template():
         where_parts = filtros + [
             'telefone != ""',
             'whatsapp_opt_in=1',
-            'whatsapp_opt_out=0'
+            'whatsapp_opt_out=0',
+            'COALESCE(arquivado, 0)=0'
         ]
 
         where = (
@@ -2434,8 +3035,6 @@ def importar_empreendimentos():
     conn.commit(); conn.close()
     return jsonify({'success': True, 'importados': ok, 'erros': erros, 'log': log})
 
-import re as _re
-import unicodedata as _unicodedata
 
 _OPT_SIM = {'sim', 's', 'yes', 'y', 'true', '1', 'x', 'ok', 'autorizado', 'autorizou',
             'aceito', 'aceitou', 'consentiu', 'optin', 'opt-in', 'opt_in'}
@@ -2477,7 +3076,7 @@ def _parse_data_consentimento(valor):
 
 
 def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
-                        confirmo_base_legal, fonte, usuario_id):
+                        confirmo_base_legal, fonte, usuario_id, atualizar_status=False):
     """Cria/atualiza leads a partir de linhas de CSV, com registro de opt-in.
 
     Regras: opt-in so vale quando explicito (ou quando o usuario marcou o padrao do arquivo);
@@ -2515,8 +3114,15 @@ def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
         entry = por_tel.setdefault(tel, {
             'nome': '', 'email': '', 'decisao': 'sem_info', 'origem': '',
             'data': None, 'linhas': [], 'conflito': False,
+            'status': '', 'origem_lead': '', 'obs': '',
         })
         entry['linhas'].append(linha)
+        if _limpar_status(row.get('status')):
+            entry['status'] = _limpar_status(row.get('status'))
+        if str(row.get('origem') or '').strip():
+            entry['origem_lead'] = str(row['origem']).strip()[:100]
+        if str(row.get('observacoes') or '').strip():
+            entry['obs'] = str(row['observacoes']).strip()[:2000]
         if str(row.get('nome') or '').strip():
             entry['nome'] = str(row['nome']).strip()[:200]
         if email:
@@ -2546,7 +3152,7 @@ def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
 
     existentes = {}
     for lead in conn.execute(
-        "SELECT id, nome, email, telefone, whatsapp_opt_in, whatsapp_opt_out "
+        "SELECT id, nome, email, telefone, status, whatsapp_opt_in, whatsapp_opt_out, COALESCE(arquivado, 0) AS arquivado "
         "FROM leads WHERE telefone IS NOT NULL AND telefone<>''"
     ).fetchall():
         chave = _normalizar_telefone_br(lead['telefone'])
@@ -2555,16 +3161,34 @@ def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
 
     r = {'criados': 0, 'leads_atualizados': 0, 'optin_registrados': 0, 'ja_tinham_optin': 0,
          'optin_ignorado_por_optout': 0, 'optout_registrados': 0, 'sem_alteracao_de_consentimento': 0,
-         'conflitos_resolvidos_para_optout': 0}
+         'conflitos_resolvidos_para_optout': 0, 'status_atualizados': 0, 'arquivados_encontrados': 0}
+    # status da planilha que ainda nao existem no CRM sao acrescentados
+    existentes_status = _status_existentes(conn)
+    canon_status, novos_status = {}, []
+    for e in por_tel.values():
+        if not e['status']:
+            continue
+        chave = _token_texto(e['status'])
+        if chave in existentes_status:
+            canon_status[chave] = existentes_status[chave]
+        elif chave not in canon_status:
+            canon_status[chave] = e['status']
+            novos_status.append(e['status'])
+            if not simular:
+                _garantir_status_lead(conn, e['status'], existentes_status)
     elegiveis, nao_elegiveis = [], 0
     agora = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     for tel, e in por_tel.items():
+        status_final = canon_status.get(_token_texto(e['status'])) if e['status'] else None
         origem_txt = f"CSV ({fonte}): {e['origem']}" if fonte else f"CSV: {e['origem']}"
         if e['conflito']:
             r['conflitos_resolvidos_para_optout'] += 1
         leads_do_tel = existentes.get(tel)
         if leads_do_tel:
             todos_elegiveis = True
+            if any(l['arquivado'] for l in leads_do_tel):
+                r['arquivados_encontrados'] += 1
+                todos_elegiveis = False   # lead arquivado nao recebe campanha
             nome_final = e['nome'] or leads_do_tel[-1]['nome']
             for lead in leads_do_tel:
                 sets, params = [], []
@@ -2574,6 +3198,9 @@ def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
                     sets.append('email=?'); params.append(e['email'])
                 if sets:
                     r['leads_atualizados'] += 1
+                if atualizar_status and status_final and status_final != (lead['status'] or ''):
+                    sets.append('status=?'); params.append(status_final)
+                    r['status_atualizados'] += 1
                 opt_in, opt_out = int(lead['whatsapp_opt_in'] or 0), int(lead['whatsapp_opt_out'] or 0)
                 if e['decisao'] == 'optout':
                     if not (opt_out == 1 and opt_in == 0):
@@ -2615,11 +3242,11 @@ def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
                 conn.execute(
                     '''INSERT INTO leads
                        (nome, telefone, email, origem, tipo_interesse, status, temperatura, responsavel_id,
-                        whatsapp_opt_in, whatsapp_opt_in_source, whatsapp_opt_in_at, whatsapp_opt_out)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
-                    (e['nome'] or f'Contato {tel[-4:]}', tel, e['email'], 'Importação CSV', 'Lancamento',
-                     'Novo', 'Frio', usuario_id, opt_in, origem_txt if opt_in else '',
-                     (e['data'] or agora) if opt_in else None, opt_out),
+                        whatsapp_opt_in, whatsapp_opt_in_source, whatsapp_opt_in_at, whatsapp_opt_out, observacoes)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                    (e['nome'] or f'Contato {tel[-4:]}', tel, e['email'], e['origem_lead'] or 'Importação CSV', 'Lancamento',
+                     status_final or 'Novo', 'Frio', usuario_id, opt_in, origem_txt if opt_in else '',
+                     (e['data'] or agora) if opt_in else None, opt_out, e['obs']),
                 )
             if opt_in and not opt_out:
                 elegiveis.append({'nome': e['nome'] or f'Contato {tel[-4:]}', 'telefone': tel})
@@ -2630,7 +3257,7 @@ def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
     relatorio = {
         'success': True, 'simulado': bool(simular), 'total_linhas': len(linhas),
         'telefones_unicos': len(por_tel), 'duplicadas_no_arquivo': duplicadas,
-        **r, 'elegiveis': len(elegiveis), 'nao_elegiveis': nao_elegiveis,
+        **r, 'status_novos': novos_status, 'elegiveis': len(elegiveis), 'nao_elegiveis': nao_elegiveis,
         'erros_total': len(erros), 'erros': erros[:50], 'avisos_total': len(avisos), 'avisos': avisos[:50],
         'contatos_elegiveis': elegiveis,
     }
@@ -2665,6 +3292,7 @@ def importar_leads_csv():
             confirmo_base_legal=bool(data.get('confirmo_base_legal')),
             fonte=str(data.get('fonte') or '').strip()[:120],
             usuario_id=session.get('user_id'),
+            atualizar_status=bool(data.get('atualizar_status')),
         )
         return jsonify(relatorio)
     except ValueError as exc:
@@ -2675,6 +3303,174 @@ def importar_leads_csv():
         raise
     finally:
         conn.close()
+
+
+_PALETA_STATUS = ['#06b6d4', '#f97316', '#ec4899', '#84cc16', '#a855f7', '#14b8a6', '#eab308', '#f43f5e']
+
+
+def _limpar_status(nome):
+    return ' '.join(str(nome or '').split())[:40]
+
+
+def _status_existentes(conn):
+    """{nome sem acento/maiuscula: nome cadastrado} para casar 'visita' com 'Visita'."""
+    return {_token_texto(r['nome']): r['nome'] for r in conn.execute("SELECT nome FROM status_leads")}
+
+
+def _garantir_status_lead(conn, nome, existentes=None):
+    """Devolve (nome_canonico, criado). Cria o status se ainda nao existir. Quem chama faz o commit."""
+    nome = _limpar_status(nome)
+    if not nome:
+        return 'Novo', False
+    existentes = existentes if existentes is not None else _status_existentes(conn)
+    chave = _token_texto(nome)
+    if chave in existentes:
+        return existentes[chave], False
+    proxima = (conn.execute("SELECT COALESCE(MAX(ordem), 0) FROM status_leads WHERE ordem < 9999").fetchone()[0] or 0) + 1
+    qtd = conn.execute("SELECT COUNT(*) FROM status_leads").fetchone()[0]
+    conn.execute(
+        "INSERT INTO status_leads (nome, ordem, cor) VALUES (?, ?, ?)",
+        (nome, proxima, _PALETA_STATUS[qtd % len(_PALETA_STATUS)]),
+    )
+    existentes[chave] = nome
+    return nome, True
+
+
+@app.route('/api/status-leads', methods=['GET'])
+@login_required
+def listar_status_leads():
+    conn = get_db()
+    try:
+        rows = conn.execute("SELECT nome, ordem, cor FROM status_leads ORDER BY ordem, nome").fetchall()
+        return jsonify([dict(r) for r in rows])
+    finally:
+        conn.close()
+
+
+@app.route('/api/status-leads', methods=['POST'])
+@login_required
+def criar_status_lead():
+    nome = _limpar_status((request.get_json(silent=True) or {}).get('nome'))
+    if not nome:
+        return jsonify({'success': False, 'error': 'Informe o nome do status.'}), 400
+    conn = get_db()
+    try:
+        canonico, criado = _garantir_status_lead(conn, nome)
+        conn.commit()
+        return jsonify({'success': True, 'nome': canonico, 'criado': criado})
+    finally:
+        conn.close()
+
+
+_EXT_IMPORTACAO = {'.csv', '.txt', '.xlsx'}
+_MAX_IMPORTACAO_BYTES = 10 * 1024 * 1024
+
+
+def _xlsx_para_csv(origem):
+    """Converte a primeira aba de uma planilha .xlsx em texto CSV (para o mesmo leitor do CSV)."""
+    try:
+        from openpyxl import load_workbook
+    except ImportError as exc:
+        raise RuntimeError('Suporte a .xlsx indisponível (instale openpyxl).') from exc
+    wb = load_workbook(origem, read_only=True, data_only=True)
+    try:
+        saida = io.StringIO()
+        escritor = csv.writer(saida)
+        for linha in wb.worksheets[0].iter_rows(values_only=True):
+            celulas = []
+            for v in linha:
+                if v is None:
+                    celulas.append('')
+                elif isinstance(v, float) and v.is_integer():
+                    celulas.append(str(int(v)))
+                elif isinstance(v, datetime):
+                    celulas.append(v.strftime('%Y-%m-%d %H:%M:%S') if (v.hour or v.minute or v.second) else v.strftime('%Y-%m-%d'))
+                elif isinstance(v, date):
+                    celulas.append(v.strftime('%Y-%m-%d'))
+                else:
+                    celulas.append(str(v))
+            if any(c.strip() for c in celulas):
+                escritor.writerow(celulas)
+        return saida.getvalue()
+    finally:
+        wb.close()
+
+
+def _texto_do_arquivo(caminho):
+    if caminho.suffix.lower() == '.xlsx':
+        return _xlsx_para_csv(caminho)
+    bruto = caminho.read_bytes()
+    for codificacao in ('utf-8-sig', 'cp1252'):
+        try:
+            return bruto.decode(codificacao)
+        except UnicodeDecodeError:
+            continue
+    return bruto.decode('latin-1')
+
+
+@app.route('/api/importar/drive', methods=['GET'])
+@login_required
+def listar_arquivos_importacao():
+    """Lista os arquivos da pasta de importacao (no Google Drive montado)."""
+    try:
+        CRM_IMPORT_ROOT.mkdir(parents=True, exist_ok=True)
+        itens = []
+        for p in CRM_IMPORT_ROOT.iterdir():
+            if p.is_file() and not p.name.startswith(('.', '~$')) and p.suffix.lower() in _EXT_IMPORTACAO:
+                st = p.stat()
+                itens.append((st.st_mtime, {
+                    'nome': p.name,
+                    'tamanho_kb': round(st.st_size / 1024, 1),
+                    'modificado': datetime.fromtimestamp(st.st_mtime).strftime('%d/%m/%Y %H:%M'),
+                }))
+    except OSError as exc:
+        return jsonify({'success': False, 'error': f'Não foi possível acessar a pasta de importação: {exc}'}), 503
+    itens.sort(key=lambda t: t[0], reverse=True)
+    return jsonify({'success': True, 'pasta': str(CRM_IMPORT_ROOT), 'arquivos': [i[1] for i in itens[:200]]})
+
+
+@app.route('/api/importar/drive/ler', methods=['POST'])
+@login_required
+def ler_arquivo_importacao():
+    nome = str((request.get_json(silent=True) or {}).get('arquivo') or '')
+    if not nome or nome != os.path.basename(nome) or '\\' in nome or nome.startswith('.'):
+        return jsonify({'success': False, 'error': 'Nome de arquivo inválido.'}), 400
+    if Path(nome).suffix.lower() not in _EXT_IMPORTACAO:
+        return jsonify({'success': False, 'error': 'Use arquivos .csv, .txt ou .xlsx.'}), 400
+    try:
+        real = (CRM_IMPORT_ROOT / nome).resolve(strict=True)
+    except (FileNotFoundError, OSError):
+        return jsonify({'success': False, 'error': 'Arquivo não encontrado na pasta de importação.'}), 404
+    # precisa estar DIRETAMENTE dentro da pasta (bloqueia atalhos/links para fora dela)
+    if real.parent != CRM_IMPORT_ROOT.resolve() or not real.is_file():
+        return jsonify({'success': False, 'error': 'Arquivo fora da pasta de importação.'}), 400
+    if real.stat().st_size > _MAX_IMPORTACAO_BYTES:
+        return jsonify({'success': False, 'error': 'Arquivo maior que 10 MB.'}), 413
+    try:
+        texto = _texto_do_arquivo(real)
+    except RuntimeError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 501
+    except Exception:
+        return jsonify({'success': False, 'error': 'Não foi possível ler o arquivo. Confira se não está corrompido.'}), 422
+    return jsonify({'success': True, 'nome': nome, 'texto': texto})
+
+
+@app.route('/api/importar/converter', methods=['POST'])
+@login_required
+def converter_planilha_xlsx():
+    """Recebe um .xlsx enviado do computador e devolve o texto CSV da primeira aba."""
+    arquivo = request.files.get('arquivo')
+    if not arquivo or Path(arquivo.filename or '').suffix.lower() != '.xlsx':
+        return jsonify({'success': False, 'error': 'Envie um arquivo .xlsx.'}), 400
+    bruto = arquivo.read(_MAX_IMPORTACAO_BYTES + 1)
+    if len(bruto) > _MAX_IMPORTACAO_BYTES:
+        return jsonify({'success': False, 'error': 'Arquivo maior que 10 MB.'}), 413
+    try:
+        return jsonify({'success': True, 'texto': _xlsx_para_csv(io.BytesIO(bruto))})
+    except RuntimeError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 501
+    except Exception:
+        return jsonify({'success': False, 'error': 'Não foi possível ler a planilha.'}), 422
 
 
 @app.route('/api/importacoes', methods=['GET'])
@@ -2853,13 +3649,30 @@ def whatsapp_webhook():
         register_incoming(
             phone=phone,
             name=name,
-            text=text,
+            detail=text,
         )
+
+        resposta_rapida = None
+        try:
+            _conn_resp = get_db()
+            try:
+                resposta_rapida = _processar_resposta_rapida(
+                    _conn_resp,
+                    phone,
+                    text,
+                    ((payload.get("data") or {}).get("key") or {}).get("id")
+                    if isinstance(payload, dict) else None,
+                )
+            finally:
+                _conn_resp.close()
+        except Exception as exc:
+            print("Aviso: falha ao processar resposta rápida:", repr(exc))
 
         return jsonify({
             "ok": True,
             "received": True,
             "phone": phone,
+            "resposta_rapida": resposta_rapida,
         })
 
     except Exception as exc:
