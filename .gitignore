@@ -28,3 +28,5 @@ leads_importados.csv
 PATCH*.patch
 leads_importados.csv
 *.csv
+
+importacao_output/
