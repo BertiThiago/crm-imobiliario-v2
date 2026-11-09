@@ -1,0 +1,33 @@
+════════════════════════════════════════════════════════════
+  ImobiCRM Pro — Relatório de Extração
+  27/10/2026 13:17
+════════════════════════════════════════════════════════════
+  Arquivos processados : 1
+  Empreendimentos      : 1
+  Unidades             : 4
+────────────────────────────────────────────────────────────
+
+📄 BOOK - AZZURE.pdf
+   Empreendimentos: 1
+   Unidades:        4
+     • Prime House Parque Bussocaba nasceu como
+um jardim de oportunidades — .
+PLANTA TIPO DO APTO. DE 63 M2
+SUGESTÃO DE DECORAÇÃO. EVENT
+
+────────────────────────────────────────────────────────────
+  Arquivos gerados:
+  ✅ importacao_output\empreendimentos_import_20261027_131133.csv
+  ✅ importacao_output\empreendimentos_import_20261027_131133.sql
+  ✅ importacao_output\unidades_import_20261027_131133.csv
+  ✅ importacao_output\unidades_import_20261027_131133.sql
+
+────────────────────────────────────────────────────────────
+  PRÓXIMOS PASSOS:
+  1. Abra os CSVs gerados e revise os dados
+  2. Para empreendimentos: ajuste construtora_nome se necessário
+  3. Para unidades: preencha a coluna empreendimento_id com o ID correto
+     (confira o ID na tela de Empreendimentos do CRM)
+  4. Execute o SQL no banco: sqlite3 database/crm.db < arquivo.sql
+     OU use o menu Importação no CRM (Configurações → Importar Dados)
+════════════════════════════════════════════════════════════

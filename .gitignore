@@ -16,3 +16,15 @@ build/
 *.backup
 *-BACKUP*
 *.py-backup
+
+PATCH*.patch
+leads_importados.csv
+*.csv
+
+PATCH*.patch
+leads_importados.csv
+*.csv
+
+PATCH*.patch
+leads_importados.csv
+*.csv
