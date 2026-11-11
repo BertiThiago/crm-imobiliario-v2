@@ -546,6 +546,9 @@ const statusBadge = s => {
   if(!/^#[0-9a-f]{6}$/i.test(cor)) cor = '#64748b';
   return `<span class="badge" style="background:${cor}33;color:${cor}">${_escCSV(s)}</span>`;
 };
+const _ORIGENS_PADRAO = ['Direto','Instagram','Facebook','Google','Indicação','QuintoAndar','ZAP Imóveis','Viva Real','Site','Portal ImóvelWeb','OLX','Plantão'];
+// inclui a origem atual do lead mesmo que não esteja na lista (ex.: "Lista", vinda da importação), para não trocá-la ao salvar
+const opcoesOrigemLead = atual => { const l = _ORIGENS_PADRAO.slice(); if(atual && !l.includes(atual)) l.unshift(atual); return l.map(o => `<option ${o === atual ? 'selected' : ''}>${_escCSV(o)}</option>`).join(''); };
 const opcoesStatus = sel => (window._statusLeads || []).map(s => `<option ${s.nome === sel ? 'selected' : ''}>${_escCSV(s.nome)}</option>`).join('');
 const tempBadge = t => `<span class="badge badge-${(t||'frio').toLowerCase()}"><span class="temp-dot ${(t||'frio').toLowerCase()}"></span>${t||'Frio'}</span>`;
 const tipoBadge = t => `<span class="badge badge-${t==='QuintoAndar'?'quintoandar':'lancamento'}">${t}</span>`;
@@ -715,6 +718,7 @@ function renderLeadsRows(leads) {
       <td><input type="checkbox" data-id="${l.id}" onchange="selecionarLead(${l.id}, this.checked)"></td>
       <td><div style="font-weight:600;cursor:pointer;color:var(--accent)" onclick="abrirLead(${l.id})">${_escCSV(l.nome)}</div>
           <div style="font-size:11px;color:var(--text3)">${_escCSV(l.empreendimento || '—')}</div>
+          ${l.info_fonte ? `<div style="font-size:11px;color:var(--text3)">${_escCSV(l.info_fonte)}</div>` : ''}
           ${Number(l.arquivado) === 1 ? `<div style="font-size:11px;color:var(--text3)"><i class="fas fa-archive"></i> Arquivado em ${fmtDate((l.arquivado_em || '').split(/[T ]/)[0])}${l.motivo_arquivamento ? ' · ' + _escCSV(l.motivo_arquivamento) : ''}</div>` : ''}</td>
       <td>${_escCSV(l.telefone || '—')}<br><span style="font-size:11px;color:var(--text3)">${_escCSV(l.email || '')}</span></td>
       <td>${tipoBadge(l.tipo_interesse)}</td>
@@ -891,11 +895,7 @@ async function abrirLead(id) {
           <select id="el-empr"><option value="">-- Nenhum --</option>${optsE}</select>
         </div>
         <div class="form-group"><label>Origem</label>
-          <select id="el-origem"><option ${l.origem=='Direto'?
-          'selected':''}>Direto</option><option ${l.origem=='Oferta Ativa'?  
-          'selected':''}>Oferta</option><option ${l.origem=='Lead'?
-          'selected':''}>Lead</option><option ${l.origem=='Lista'?
-          'selected':''}>Lista</option><option ${l.origem=='Instagram'?'selected':''}>Instagram</option><option ${l.origem=='Facebook'?'selected':''}>Facebook</option><option ${l.origem=='Google'?'selected':''}>Google</option><option ${l.origem=='Indicação'?'selected':''}>Indicação</option><option ${l.origem=='QuintoAndar'?'selected':''}>QuintoAndar</option><option ${l.origem=='ZAP Imóveis'?'selected':''}>ZAP Imóveis</option><option ${l.origem=='Viva Real'?'selected':''}>Viva Real</option></select>
+          <select id="el-origem">${opcoesOrigemLead(l.origem)}</select>
         </div>
         <div class="form-group"><label>Temperatura</label>
           <select id="el-temp"><option ${l.temperatura=='Frio'?'selected':''}>Frio</option><option ${l.temperatura=='Morno'?'selected':''}>Morno</option><option ${l.temperatura=='Quente'?'selected':''}>Quente</option></select>
@@ -904,7 +904,11 @@ async function abrirLead(id) {
           <select id="el-status">${opcoesStatus(l.status)}</select>
         </div>
         <div class="form-group"><label>Valor Interesse</label><input id="el-valor" type="number" value="${l.valor_interesse||''}"></div>
-        <div class="form-group form-full"><label>Observações</label><textarea id="el-obs">${_escCSV(l.observacoes||'')}</textarea></div>
+        <div class="form-group"><label>Informações da fonte</label><input id="el-infofonte" value="${_escCSV(l.info_fonte||'')}"></div>
+          <div class="form-group"><label>Nº externo (código em outro sistema)</label><input id="el-codext" value="${_escCSV(l.codigo_externo||'')}"></div>
+          <div class="form-group"><label>Data limite de atendimento</label><input type="date" id="el-datalimite" value="${_escCSV(l.data_limite||'')}"></div>
+          <div class="form-group"><label>Data do status</label><input type="date" id="el-datastatus" value="${_escCSV(l.data_status||'')}"></div>
+          <div class="form-group form-full"><label>Observações</label><textarea id="el-obs">${_escCSV(l.observacoes||'')}</textarea></div>
       </div>
       <div class="card" style="margin-top:16px;padding:14px;border-color:${Number(l.whatsapp_opt_in)===1 && Number(l.whatsapp_opt_out||0)===0 ? 'rgba(34,197,94,.35)' : 'rgba(239,68,68,.35)'}">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
@@ -1048,6 +1052,10 @@ async function salvarLead(id) {
     status: document.getElementById('el-status').value,
     valor_interesse: document.getElementById('el-valor').value||null,
     observacoes: document.getElementById('el-obs').value,
+    info_fonte: document.getElementById('el-infofonte').value.trim() || null,
+    codigo_externo: document.getElementById('el-codext').value.trim() || null,
+    data_limite: document.getElementById('el-datalimite').value || null,
+    data_status: document.getElementById('el-datastatus').value || null,
   });
   alert('✅ Lead salvo!');
   closeModal();
@@ -2106,16 +2114,24 @@ function adicionarManual() {
 // Colunas aceitas: nome, telefone (ou numero/celular/whatsapp), email, opt_in, opt_out,
 // origem_consentimento, data_consentimento. Sem cabeçalho: coluna A = nome, B = número.
 const _ALIAS_CSV = {
-  nome: ['nome','name','cliente','contato'],
-  telefone: ['telefone','numero','celular','whatsapp','fone','tel','phone'],
-  email: ['email','e-mail'],
+  nome: ['nomeesobrenome','nomecompleto','nome','name','cliente','contato'],
+  telefone: ['telefone','numero','celular','whatsapp','fone','tel','phone','telefonedocliente'],
+  email: ['email','e-mail','emaildocliente'],
   opt_in: ['optin','opt-in','opt_in','consentimento','autorizawhatsapp','aceitawhatsapp','whatsappoptin','autorizacao'],
   opt_out: ['optout','opt-out','opt_out','descadastrado','naoreceber'],
   origem_consentimento: ['origemconsentimento','origemoptin','origemdoconsentimento','fonteconsentimento','fonteoptin'],
+  data_consentimento: ['dataconsentimento','dataoptin','datadoconsentimento'],
   status: ['status','situacao','etapa','fase','funil'],
-  origem: ['origem','fonte','canal'],
-  observacoes: ['observacoes','observacao','obs','anotacoes','notas'],
-  data_consentimento: ['dataconsentimento','dataoptin','datadoconsentimento']
+  origem: ['origem','fonte','canal','origemdolead'],
+  info_fonte: ['informacoesdafonte','informacaodafonte','infofonte','campanha','lista'],
+  codigo_externo: ['codigoexterno','nexterno','nsivez','codigo','idexterno'],
+  data_cadastro: ['datacadastro','datadecadastro','cadastro','criadoem'],
+  data_limite: ['datalimite','prazo','prazodeatendimento'],
+  data_status: ['datastatus','datadostatus','dataultimostatus'],
+  valor_potencial: ['valorpotencial','valorinteresse'],
+  observacoes: ['observacoes','observacao','obs','anotacoes','notas','comentario','comentarios'],
+  arquivado: ['arquivado','arquivar'],
+  motivo_arquivamento: ['motivoarquivamento','motivodoarquivamento']
 };
 const _normCab = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,'');
 const _escCSV = s => String(s ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -2148,9 +2164,10 @@ function lerCSVContatos(texto) {
   const cab = linhas[0].map(_normCab);
   const col = {};
   Object.entries(_ALIAS_CSV).forEach(([campo, aliases]) => {
-    const alvo = aliases.map(_normCab);
-    const i = cab.findIndex(c => alvo.includes(c));
-    if(i >= 0) col[campo] = i;
+    for(const a of aliases.map(_normCab)) {      // o 1º apelido que existir vence ("Nome e sobrenome" antes de "Nome")
+      const i = cab.indexOf(a);
+      if(i >= 0 && !Object.values(col).includes(i)) { col[campo] = i; break; }
+    }
   });
   let inicio = 1;
   if(col.telefone === undefined) {
@@ -2165,7 +2182,9 @@ function lerCSVContatos(texto) {
     Object.keys(col).forEach(campo => { o[campo] = row[col[campo]] ?? ''; });
     dados.push(o);
   }
-  return {linhas: dados, colunas: Object.keys(col), semCabecalho: inicio === 0};
+  const usadas = new Set(Object.values(col));
+  const ignoradas = inicio === 1 ? linhas[0].filter((nomeCol, i) => nomeCol && !usadas.has(i)) : [];
+  return {linhas: dados, colunas: Object.keys(col), ignoradas, semCabecalho: inicio === 0};
 }
 
 function importarCSV() { abrirImportacaoLeadsCSV(true); }
@@ -2173,13 +2192,30 @@ function importarCSV() { abrirImportacaoLeadsCSV(true); }
 function processarTextoImportCSV(texto, nomeArquivo, paraCampanha) {
   const lido = lerCSVContatos(texto);
   if(lido.erro) { alert(lido.erro); return; }
-  window._impCSV = {linhas: lido.linhas, colunas: lido.colunas, semCabecalho: lido.semCabecalho, arquivo: nomeArquivo, paraCampanha: !!paraCampanha, concluida: false};
+  window._impCSV = {linhas: lido.linhas, colunas: lido.colunas, ignoradas: lido.ignoradas || [], semCabecalho: lido.semCabecalho, arquivo: nomeArquivo, paraCampanha: !!paraCampanha, concluida: false};
   mostrarDialogoImportCSV();
 }
 
-async function converterXlsxNoServidor(file) {
+// Planilha com várias abas: o usuário escolhe qual importar. Devolve o nome da aba (ou null).
+function escolherAbaPlanilha(abas) {
+  return new Promise(resolve => {
+    document.getElementById('imp-aba-overlay')?.remove();
+    const ov = document.createElement('div');
+    ov.id = 'imp-aba-overlay'; ov.className = 'modal-overlay'; ov.style.zIndex = 2200;
+    ov.innerHTML = `<div class="modal fade-in"><div class="modal-header"><h2>Qual aba importar?</h2><button class="modal-close" data-fechar="1">×</button></div>
+      <div class="modal-body"><p style="font-size:12px;color:var(--text3);margin-bottom:10px">Esta planilha tem ${abas.length} abas. Cada importação lê uma aba.</p>
+      ${abas.map((a, i) => `<button class="btn btn-secondary" style="display:flex;width:100%;justify-content:space-between;margin-bottom:6px" data-i="${i}" ${a.linhas ? '' : 'disabled'}><span>${_escCSV(a.nome)}</span><span style="color:var(--text3)">${a.linhas ? Number(a.linhas).toLocaleString('pt-BR') + ' linha(s)' : 'vazia'}</span></button>`).join('')}</div></div>`;
+    document.body.appendChild(ov);
+    const fechar = v => { ov.remove(); resolve(v); };
+    ov.querySelector('[data-fechar]').onclick = () => fechar(null);
+    ov.querySelectorAll('button[data-i]').forEach(b => b.onclick = () => fechar(abas[Number(b.dataset.i)].nome));
+  });
+}
+
+async function converterXlsxNoServidor(file, aba) {
   const fd = new FormData();
   fd.append('arquivo', file);
+  if(aba) fd.append('aba', aba);
   const resp = await fetch('/api/importar/converter', {method: 'POST', body: fd, credentials: 'same-origin'});
   return resp.json();
 }
@@ -2193,8 +2229,13 @@ function abrirImportacaoLeadsCSV(paraCampanha) {
     if(/\.xlsx$/i.test(file.name)) {
       let r;
       try { r = await converterXlsxNoServidor(file); } catch(err) { alert('Falha ao enviar a planilha ao servidor.'); return; }
+      if(r && r.success && r.escolher_aba) {
+        const aba = await escolherAbaPlanilha(r.abas);
+        if(!aba) return;
+        try { r = await converterXlsxNoServidor(file, aba); } catch(err) { alert('Falha ao enviar a planilha ao servidor.'); return; }
+      }
       if(!r || !r.success) { alert((r && r.error) || 'Não foi possível ler a planilha.'); return; }
-      processarTextoImportCSV(r.texto, file.name, paraCampanha);
+      processarTextoImportCSV(r.texto, file.name + (r.abas && r.abas.length > 1 ? ' · ' + r.aba : ''), paraCampanha);
       return;
     }
     const leitor = new FileReader();
@@ -2251,36 +2292,60 @@ async function listarArquivosDrive(paraCampanha) {
     btn.onclick = async () => {
       const arq = r.arquivos[Number(btn.dataset.i)];
       btn.disabled = true; btn.textContent = 'Lendo...';
-      const lido = await POST('/importar/drive/ler', {arquivo: arq.nome});
+      let lido = await POST('/importar/drive/ler', {arquivo: arq.nome});
+      if(lido && lido.success && lido.escolher_aba) {
+        const aba = await escolherAbaPlanilha(lido.abas);
+        if(!aba) { btn.disabled = false; btn.textContent = 'Usar'; return; }
+        lido = await POST('/importar/drive/ler', {arquivo: arq.nome, aba});
+      }
       if(!lido || !lido.success) { alert((lido && lido.error) || 'Não foi possível ler o arquivo.'); btn.disabled = false; btn.textContent = 'Usar'; return; }
       fecharDriveCSV();
-      processarTextoImportCSV(lido.texto, arq.nome, paraCampanha);
+      processarTextoImportCSV(lido.texto, arq.nome + (lido.abas && lido.abas.length > 1 ? ' · ' + lido.aba : ''), paraCampanha);
     };
   });
 }
 
 function fecharDialogoImportCSV() { document.getElementById('imp-csv-overlay')?.remove(); }
 
+const _STATUS_SEM_INTERESSE = /\b(nao|n)\s+tem\s+interesse|\bs\/\s*interesse|\bsem\s+interesse|\brepetido\b|\bdescartad/;
+const _semAcento = t => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
 function mostrarDialogoImportCSV() {
   fecharDialogoImportCSV();
   const d = window._impCSV;
   const temOptin = d.colunas.includes('opt_in');
-  const rotulos = {nome:'Nome', telefone:'Telefone', email:'E-mail', opt_in:'Opt-in', opt_out:'Opt-out', origem_consentimento:'Origem do consentimento', data_consentimento:'Data do consentimento', status:'Status', origem:'Origem do lead', observacoes:'Observações'};
+  const rotulos = {nome:'Nome', telefone:'Telefone', email:'E-mail', opt_in:'Opt-in', opt_out:'Opt-out', origem_consentimento:'Origem do consentimento', data_consentimento:'Data do consentimento', status:'Status', origem:'Origem (fonte)', observacoes:'Observações', info_fonte:'Informações da fonte', codigo_externo:'Nº externo', data_cadastro:'Data de cadastro', data_limite:'Data limite', data_status:'Data do status', valor_potencial:'Valor potencial', arquivado:'Arquivado', motivo_arquivamento:'Motivo do arquivamento'};
+  // status distintos (sem diferenciar maiúsculas/acentos) para escolher quais entram arquivados
+  const contagem = new Map();
+  if(d.colunas.includes('status')) d.linhas.forEach(l => {
+    const nome = String(l.status || '').replace(/\s+/g, ' ').trim();
+    if(!nome) return;
+    const chave = _normCab(nome);
+    const atual = contagem.get(chave) || {nome, n: 0};
+    atual.n++; contagem.set(chave, atual);
+  });
+  const statusLista = [...contagem.values()].sort((a, b) => b.n - a.n).slice(0, 40);
   const ov = document.createElement('div');
   ov.id = 'imp-csv-overlay'; ov.className = 'modal-overlay'; ov.style.zIndex = 2000;
   ov.innerHTML = `
     <div class="modal modal-lg fade-in">
-      <div class="modal-header"><h2>Importar contatos do CSV</h2><button class="modal-close" onclick="fecharDialogoImportCSV()">×</button></div>
-      <div class="modal-body">
-        <p style="font-size:13px;color:var(--text2);margin-bottom:10px"><strong>${_escCSV(d.arquivo)}</strong> — ${d.linhas.length} linha(s).
-          Colunas: ${d.colunas.map(c=>_escCSV(rotulos[c]||c)).join(', ')}${d.semCabecalho ? ' (sem cabeçalho: A = nome, B = número)' : ''}.</p>
-        <p style="font-size:12px;color:var(--text3);margin-bottom:14px">Leads que ainda não existem serão cadastrados; nome e e-mail dos já existentes são atualizados. Opt-out nunca é revertido por CSV.</p>
+      <div class="modal-header"><h2>Importar contatos</h2><button class="modal-close" onclick="fecharDialogoImportCSV()">×</button></div>
+      <div class="modal-body" style="max-height:70vh;overflow:auto">
+        <p style="font-size:13px;color:var(--text2);margin-bottom:6px"><strong>${_escCSV(d.arquivo)}</strong> — ${d.linhas.length.toLocaleString('pt-BR')} linha(s).<br>
+          Colunas usadas: ${d.colunas.map(c=>_escCSV(rotulos[c]||c)).join(', ')}${d.semCabecalho ? ' (sem cabeçalho: A = nome, B = número)' : ''}.</p>
+        ${d.ignoradas && d.ignoradas.length ? `<p style="font-size:12px;color:var(--text3);margin-bottom:10px">Colunas ignoradas: ${d.ignoradas.map(_escCSV).join(', ')}.</p>` : ''}
+        <p style="font-size:12px;color:var(--text3);margin-bottom:14px">Leads novos são cadastrados; nos já existentes, nome e e-mail são atualizados e campos vazios (fonte, nº externo, prazo, valor) são preenchidos, sem sobrescrever o que já existe. Opt-out nunca é revertido.</p>
         <div class="form-group form-full"><label>Origem do consentimento (padrão do arquivo)</label>
           <input id="imp-origem" placeholder="Ex.: Formulário do site, 09/2026"></div>
         ${temOptin
           ? `<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:10px 0"><input type="checkbox" id="imp-optin-padrao"> <span>Tratar linhas com a coluna de opt-in <strong>vazia</strong> como autorizadas</span></label>`
           : `<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:10px 0"><input type="checkbox" id="imp-optin-padrao"> <span>Este arquivo <strong>não tem coluna de opt-in</strong>. Marque se <strong>todos</strong> os contatos autorizaram contato por WhatsApp. Sem marcar, os leads são cadastrados <strong>sem</strong> opt-in e não poderão receber campanha.</span></label>`}
-        ${d.colunas.includes('status') ? `<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:10px 0"><input type="checkbox" id="imp-atualizar-status"> <span>Atualizar o <strong>status</strong> dos leads que já existem com o da planilha (status novos são sempre criados)</span></label>` : ''}
+        ${statusLista.length ? `<label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:10px 0"><input type="checkbox" id="imp-atualizar-status"> <span>Atualizar o <strong>status</strong> dos leads que já existem com o da planilha (status novos são sempre criados)</span></label>
+        <div style="margin:12px 0"><div style="font-size:13px;font-weight:600;margin-bottom:2px">Status que entram como arquivados</div>
+          <div style="font-size:12px;color:var(--text3);margin-bottom:6px">Leads <strong>novos</strong> com estes status são cadastrados já arquivados (fora das listas e das campanhas). Já marcamos os que indicam "sem interesse" ou "repetido".</div>
+          <div style="max-height:150px;overflow:auto;border:1px solid var(--border);border-radius:9px;padding:6px 10px">
+            ${statusLista.map(s => `<label style="display:flex;gap:8px;align-items:center;font-size:12px;margin:3px 0"><input type="checkbox" class="imp-arq-st" value="${_escCSV(s.nome)}" ${_STATUS_SEM_INTERESSE.test(_semAcento(s.nome)) ? 'checked' : ''}> <span style="flex:1">${_escCSV(s.nome)}</span><span style="color:var(--text3)">${s.n.toLocaleString('pt-BR')}</span></label>`).join('')}
+          </div></div>` : ''}
         <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:10px 0"><input type="checkbox" id="imp-confirmo"> <span>Confirmo que tenho base legal e registro do consentimento dos contatos marcados como opt-in.</span></label>
         <div id="imp-csv-relatorio" style="margin-top:12px;font-size:13px"></div>
       </div>
@@ -2302,38 +2367,45 @@ async function executarImportCSV(simular) {
     origem_padrao: document.getElementById('imp-origem').value.trim(),
     opt_in_padrao: document.getElementById('imp-optin-padrao').checked,
     confirmo_base_legal: document.getElementById('imp-confirmo').checked,
-    atualizar_status: !!(document.getElementById('imp-atualizar-status') && document.getElementById('imp-atualizar-status').checked)
+    atualizar_status: !!(document.getElementById('imp-atualizar-status') && document.getElementById('imp-atualizar-status').checked),
+    arquivar_status: [...document.querySelectorAll('#imp-csv-overlay .imp-arq-st:checked')].map(x => x.value)
   };
-  rel.textContent = 'Processando...';
+  rel.textContent = 'Processando... (arquivos grandes podem levar alguns segundos)';
   let r;
   try { r = await POST('/importar/leads', corpo); }
   catch(err) { rel.textContent = 'Falha de comunicação com o servidor.'; return; }
   if(!r || !r.success) { rel.innerHTML = `<span style="color:var(--red)">${_escCSV((r && r.error) || 'Não foi possível importar.')}</span>`; return; }
+  const n = v => Number(v || 0).toLocaleString('pt-BR');
   const linhasRel = [
     [r.simulado ? 'SIMULAÇÃO (nada foi gravado)' : 'Importação concluída', ''],
-    ['Linhas lidas / telefones únicos', `${r.total_linhas} / ${r.telefones_unicos}`],
-    ['Leads novos cadastrados', r.criados],
-    ['Leads existentes atualizados (nome/e-mail)', r.leads_atualizados],
-    ['Opt-in registrados', r.optin_registrados],
-    ['Já tinham opt-in', r.ja_tinham_optin],
-    ['Opt-in ignorado (lead com opt-out)', r.optin_ignorado_por_optout],
-    ['Opt-out registrados', r.optout_registrados],
-    ['Leads arquivados encontrados (continuam arquivados)', r.arquivados_encontrados],
-    ['Status atualizados em leads existentes', r.status_atualizados],
-    ['Elegíveis para campanha / não elegíveis', `${r.elegiveis} / ${r.nao_elegiveis}`],
-    ['Linhas com erro', r.erros_total]
+    ['Linhas lidas / telefones únicos', `${n(r.total_linhas)} / ${n(r.telefones_unicos)}`],
+    ['Repetidas dentro do arquivo', n(r.duplicadas_no_arquivo)],
+    ['Leads novos cadastrados', n(r.criados)],
+    ['  dos quais já arquivados', n(r.arquivados_na_importacao)],
+    ['Leads existentes atualizados (nome/e-mail)', n(r.leads_atualizados)],
+    ['Campos vazios preenchidos em existentes', n(r.campos_preenchidos)],
+    ['Origens com grafia padronizada', n(r.origens_padronizadas)],
+    ['Opt-in registrados', n(r.optin_registrados)],
+    ['Já tinham opt-in', n(r.ja_tinham_optin)],
+    ['Opt-in ignorado (lead com opt-out)', n(r.optin_ignorado_por_optout)],
+    ['Opt-out registrados', n(r.optout_registrados)],
+    ['Leads arquivados encontrados (continuam arquivados)', n(r.arquivados_encontrados)],
+    ['Status atualizados em leads existentes', n(r.status_atualizados)],
+    ['Elegíveis para campanha / não elegíveis', `${n(r.elegiveis)} / ${n(r.nao_elegiveis)}`],
+    ['Linhas com erro / avisos', `${n(r.erros_total)} / ${n(r.avisos_total)}`]
   ];
-  let html = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px">${linhasRel.map(([k,v])=>`<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0"><span>${_escCSV(k)}</span><strong>${_escCSV(v)}</strong></div>`).join('')}</div>`;
-  if(r.status_novos && r.status_novos.length) html += `<div style="margin-top:8px;font-size:13px">${r.simulado ? 'Status que serão criados' : 'Status novos criados'}: <strong>${r.status_novos.map(_escCSV).join(', ')}</strong></div>`;
+  let html = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px">${linhasRel.map(([k,v])=>`<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0"><span style="white-space:pre">${_escCSV(k)}</span><strong>${_escCSV(v)}</strong></div>`).join('')}</div>`;
+  if(r.status_novos && r.status_novos.length) html += `<div style="margin-top:8px;font-size:13px">${r.simulado ? 'Status que serão criados' : 'Status novos criados'} (${r.status_novos.length}): <strong>${r.status_novos.map(_escCSV).join(', ')}</strong></div>`;
+  if(r.existentes_nao_arquivados) html += `<div style="margin-top:8px;font-size:12px;color:var(--text3)">${n(r.existentes_nao_arquivados)} lead(s) que já existiam no CRM não foram arquivados (o arquivamento por planilha vale só para leads novos).</div>`;
   if(r.erros && r.erros.length) html += `<div style="margin-top:8px;color:var(--red);font-size:12px">${r.erros.slice(0,10).map(e=>`Linha ${_escCSV(e.linha)}: ${_escCSV(e.motivo)}`).join('<br>')}${r.erros_total>10?'<br>…':''}</div>`;
-  if(r.avisos && r.avisos.length) html += `<div style="margin-top:8px;color:var(--text3);font-size:12px">${r.avisos.slice(0,5).map(e=>`Linha ${_escCSV(e.linha)}: ${_escCSV(e.motivo)}`).join('<br>')}</div>`;
+  if(r.avisos && r.avisos.length) html += `<div style="margin-top:8px;color:var(--text3);font-size:12px">${r.avisos.slice(0,5).map(e=>`Linha ${_escCSV(e.linha)}: ${_escCSV(e.motivo)}`).join('<br>')}${r.avisos_total>5?'<br>…':''}</div>`;
   if(!r.simulado && d.paraCampanha) {
     window._waContatos = window._waContatos || [];
     const vistos = new Set(window._waContatos.map(c => String(c.telefone).replace(/\D/g,'')));
     let add = 0;
     (r.contatos_elegiveis || []).forEach(c => { const k = String(c.telefone).replace(/\D/g,''); if(!vistos.has(k)) { vistos.add(k); window._waContatos.push({nome: c.nome, telefone: c.telefone}); add++; } });
     if(typeof atualizarListaWA === 'function' && document.getElementById('wa-lista')) atualizarListaWA();
-    html += `<div style="margin-top:8px;color:var(--green);font-size:13px">${add} contato(s) elegível(is) adicionado(s) à campanha.${r.nao_elegiveis ? ` ${r.nao_elegiveis} ficaram de fora por falta de opt-in.` : ''}</div>`;
+    html += `<div style="margin-top:8px;color:var(--green);font-size:13px">${add} contato(s) elegível(is) adicionado(s) à campanha.${r.nao_elegiveis ? ` ${n(r.nao_elegiveis)} ficaram de fora por falta de opt-in ou por estarem arquivados.` : ''}</div>`;
   }
   rel.innerHTML = html;
   if(!r.simulado) {

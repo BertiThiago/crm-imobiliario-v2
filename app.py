@@ -369,6 +369,10 @@ def init_db():
         "whatsapp_opt_in_at": "DATETIME",
         "whatsapp_opt_out": "INTEGER NOT NULL DEFAULT 0",
         "arquivado": "INTEGER NOT NULL DEFAULT 0",
+        "data_limite": "DATE",
+        "data_status": "DATE",
+        "info_fonte": "TEXT",
+        "codigo_externo": "TEXT",
         "arquivado_em": "DATETIME",
         "motivo_arquivamento": "TEXT",
     }
@@ -734,9 +738,9 @@ def leads():
         if request.args.get('empreendimento_id'):
             filtros.append('l.empreendimento_id=?'); params.append(request.args['empreendimento_id'])
         if request.args.get('busca'):
-            filtros.append('(l.nome LIKE ? OR l.telefone LIKE ? OR l.email LIKE ?)')
+            filtros.append('(l.nome LIKE ? OR l.telefone LIKE ? OR l.email LIKE ? OR l.info_fonte LIKE ? OR l.codigo_externo LIKE ?)')
             b = f"%{request.args['busca']}%"
-            params.extend([b, b, b])
+            params.extend([b, b, b, b, b])
         where = ('WHERE ' + ' AND '.join(filtros)) if filtros else ''
         rows = conn.execute(f'''SELECT l.*, e.nome as empreendimento,
             u.nome as responsavel FROM leads l
@@ -876,6 +880,9 @@ def lead_detail(id):
              data.get('empreendimento_id'), _garantir_status_lead(conn, data.get('status','Novo'))[0],
              data.get('temperatura','Frio'), data.get('valor_interesse'),
              data.get('observacoes',''), id))
+        for campo in ('info_fonte', 'codigo_externo', 'data_limite', 'data_status'):
+            if campo in data:
+                conn.execute(f'UPDATE leads SET {campo}=? WHERE id=?', ((data[campo] or None), id))
         conn.commit(); conn.close()
         return jsonify({'success': True})
     conn.execute('DELETE FROM leads WHERE id=?', (id,))
@@ -3075,8 +3082,50 @@ def _parse_data_consentimento(valor):
     return None
 
 
+def _parse_data_flexivel(valor, com_hora=False):
+    """Aceita AAAA-MM-DD[ HH:MM[:SS]] e DD/MM/AAAA[ HH:MM[:SS]]. Anos fora de 1990-2100 sao invalidos."""
+    texto = str(valor or '').strip()
+    if not texto:
+        return None
+    for formato in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M', '%Y-%m-%d',
+                    '%d/%m/%Y %H:%M:%S', '%d/%m/%Y %H:%M', '%d/%m/%Y', '%d/%m/%y'):
+        try:
+            dt = datetime.strptime(texto, formato)
+        except ValueError:
+            continue
+        if not 1990 <= dt.year <= 2100:
+            return None
+        return dt.strftime('%Y-%m-%d %H:%M:%S') if com_hora else dt.strftime('%Y-%m-%d')
+    # MM/DD/AAAA (planilhas em formato americano) so quando o dia/mes nao permite outra leitura
+    try:
+        dt = datetime.strptime(texto, '%m/%d/%Y')
+    except ValueError:
+        return None
+    if not 1990 <= dt.year <= 2100:
+        return None
+    return dt.strftime('%Y-%m-%d %H:%M:%S') if com_hora else dt.strftime('%Y-%m-%d')
+
+
+def _parse_valor(valor):
+    """'320000.00', '320.000,00' e 'R$ 320.000,00' viram numero; invalido -> None."""
+    t = str(valor if valor is not None else '').strip().replace('R$', '').replace(' ', '')
+    if not t:
+        return None
+    if ',' in t and '.' in t:
+        t = t.replace('.', '').replace(',', '.') if t.rfind(',') > t.rfind('.') else t.replace(',', '')
+    elif ',' in t:
+        t = t.replace(',', '.')
+    elif t.count('.') > 1:
+        t = t.replace('.', '')
+    try:
+        numero = float(t)
+    except ValueError:
+        return None
+    return numero if numero >= 0 else None
+
+
 def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
-                        confirmo_base_legal, fonte, usuario_id, atualizar_status=False):
+                        confirmo_base_legal, fonte, usuario_id, atualizar_status=False, arquivar_status=None):
     """Cria/atualiza leads a partir de linhas de CSV, com registro de opt-in.
 
     Regras: opt-in so vale quando explicito (ou quando o usuario marcou o padrao do arquivo);
@@ -3115,6 +3164,8 @@ def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
             'nome': '', 'email': '', 'decisao': 'sem_info', 'origem': '',
             'data': None, 'linhas': [], 'conflito': False,
             'status': '', 'origem_lead': '', 'obs': '',
+            'info_fonte': '', 'codigo': '', 'data_cadastro': None, 'data_limite': None,
+            'data_status': None, 'valor': None, 'arquivar': False, 'motivo_arq': '',
         })
         entry['linhas'].append(linha)
         if _limpar_status(row.get('status')):
@@ -3125,6 +3176,31 @@ def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
             entry['obs'] = str(row['observacoes']).strip()[:2000]
         if str(row.get('nome') or '').strip():
             entry['nome'] = str(row['nome']).strip()[:200]
+        if str(row.get('info_fonte') or '').strip():
+            entry['info_fonte'] = str(row['info_fonte']).strip()[:200]
+        codigo = str(row.get('codigo_externo') or '').strip()
+        if codigo and _token_texto(codigo) not in ('n/a', 'na', '-', '0'):
+            entry['codigo'] = codigo[:60]
+        for campo_row, campo_entry, com_hora in (('data_cadastro', 'data_cadastro', True),
+                                                 ('data_limite', 'data_limite', False),
+                                                 ('data_status', 'data_status', False)):
+            bruto = row.get(campo_row)
+            if str(bruto or '').strip():
+                convertida = _parse_data_flexivel(bruto, com_hora)
+                if convertida:
+                    entry[campo_entry] = convertida
+                else:
+                    avisos.append({'linha': linha, 'motivo': f'{campo_row}: data invalida ({str(bruto)[:20]}); ignorada'})
+        if str(row.get('valor_potencial') or '').strip():
+            valor = _parse_valor(row['valor_potencial'])
+            if valor is None:
+                avisos.append({'linha': linha, 'motivo': 'valor potencial invalido; ignorado'})
+            else:
+                entry['valor'] = valor
+        if _token_texto(row.get('arquivado')) in _OPT_SIM:
+            entry['arquivar'] = True
+        if str(row.get('motivo_arquivamento') or '').strip():
+            entry['motivo_arq'] = ' '.join(str(row['motivo_arquivamento']).split())[:200]
         if email:
             entry['email'] = email[:200]
         if {entry['decisao'], decisao} >= {'optin', 'optout'}:
@@ -3152,7 +3228,8 @@ def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
 
     existentes = {}
     for lead in conn.execute(
-        "SELECT id, nome, email, telefone, status, whatsapp_opt_in, whatsapp_opt_out, COALESCE(arquivado, 0) AS arquivado "
+        "SELECT id, nome, email, telefone, status, whatsapp_opt_in, whatsapp_opt_out, COALESCE(arquivado, 0) AS arquivado, "
+        "info_fonte, codigo_externo, data_limite, data_status, valor_interesse "
         "FROM leads WHERE telefone IS NOT NULL AND telefone<>''"
     ).fetchall():
         chave = _normalizar_telefone_br(lead['telefone'])
@@ -3161,7 +3238,32 @@ def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
 
     r = {'criados': 0, 'leads_atualizados': 0, 'optin_registrados': 0, 'ja_tinham_optin': 0,
          'optin_ignorado_por_optout': 0, 'optout_registrados': 0, 'sem_alteracao_de_consentimento': 0,
-         'conflitos_resolvidos_para_optout': 0, 'status_atualizados': 0, 'arquivados_encontrados': 0}
+         'conflitos_resolvidos_para_optout': 0, 'status_atualizados': 0, 'arquivados_encontrados': 0,
+         'campos_preenchidos': 0, 'arquivados_na_importacao': 0, 'existentes_nao_arquivados': 0}
+    # a mesma origem escrita de formas diferentes ('LISTA', 'Lista') vira a grafia mais usada no arquivo
+    grafias, tokens_arquivo, grafias_no_crm = {}, set(), {}
+    for e in por_tel.values():
+        if e['origem_lead']:
+            t = _token_texto(e['origem_lead'])
+            tokens_arquivo.add(t)
+            grafias.setdefault(t, {}).setdefault(e['origem_lead'], 0)
+            grafias[t][e['origem_lead']] += 1
+    for o in conn.execute("SELECT origem, COUNT(*) AS n FROM leads WHERE origem IS NOT NULL AND TRIM(origem) <> '' GROUP BY origem").fetchall():
+        t = _token_texto(o['origem'])
+        if t in tokens_arquivo:   # tambem conta a grafia que ja existe no CRM
+            grafias[t][o['origem']] = grafias[t].get(o['origem'], 0) + o['n']
+            grafias_no_crm.setdefault(t, {})[o['origem']] = o['n']
+    canon_origem = {t: max(v.items(), key=lambda kv: kv[1])[0] for t, v in grafias.items()}
+    origens_unificadas = sum(1 for t, v in grafias.items() if t in tokens_arquivo and len(v) > 1)
+    # leads que ja estavam no CRM com outra grafia da mesma origem ('LISTA' x 'Lista') passam a usar a mesma
+    origens_padronizadas = 0
+    for t, antigas in grafias_no_crm.items():
+        for grafia, qtd in antigas.items():
+            if grafia != canon_origem[t]:
+                origens_padronizadas += qtd
+                if not simular:
+                    conn.execute("UPDATE leads SET origem=? WHERE origem=?", (canon_origem[t], grafia))
+    arq_tokens = {_token_texto(x) for x in (arquivar_status or [])}
     # status da planilha que ainda nao existem no CRM sao acrescentados
     existentes_status = _status_existentes(conn)
     canon_status, novos_status = {}, []
@@ -3180,6 +3282,9 @@ def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
     agora = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     for tel, e in por_tel.items():
         status_final = canon_status.get(_token_texto(e['status'])) if e['status'] else None
+        origem_lead = canon_origem.get(_token_texto(e['origem_lead'])) if e['origem_lead'] else None
+        arquivar_novo = bool(e['arquivar'] or (e['status'] and _token_texto(e['status']) in arq_tokens))
+        motivo_arq = e['motivo_arq'] or (f"Importado como arquivado (status: {e['status']})" if e['status'] and _token_texto(e['status']) in arq_tokens else 'Importado como arquivado')
         origem_txt = f"CSV ({fonte}): {e['origem']}" if fonte else f"CSV: {e['origem']}"
         if e['conflito']:
             r['conflitos_resolvidos_para_optout'] += 1
@@ -3190,6 +3295,8 @@ def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
                 r['arquivados_encontrados'] += 1
                 todos_elegiveis = False   # lead arquivado nao recebe campanha
             nome_final = e['nome'] or leads_do_tel[-1]['nome']
+            if arquivar_novo:
+                r['existentes_nao_arquivados'] += 1   # arquivar por planilha vale so para leads novos
             for lead in leads_do_tel:
                 sets, params = [], []
                 if e['nome'] and e['nome'] != lead['nome']:
@@ -3201,6 +3308,12 @@ def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
                 if atualizar_status and status_final and status_final != (lead['status'] or ''):
                     sets.append('status=?'); params.append(status_final)
                     r['status_atualizados'] += 1
+                for campo, valor in (('info_fonte', e['info_fonte']), ('codigo_externo', e['codigo']),
+                                     ('data_limite', e['data_limite']), ('data_status', e['data_status']),
+                                     ('valor_interesse', e['valor'])):
+                    if valor not in (None, '') and not lead.get(campo):
+                        sets.append(f'{campo}=?'); params.append(valor)
+                        r['campos_preenchidos'] += 1
                 opt_in, opt_out = int(lead['whatsapp_opt_in'] or 0), int(lead['whatsapp_opt_out'] or 0)
                 if e['decisao'] == 'optout':
                     if not (opt_out == 1 and opt_in == 0):
@@ -3238,17 +3351,23 @@ def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
                 r['optin_registrados'] += 1
             if opt_out:
                 r['optout_registrados'] += 1
+            if arquivar_novo:
+                r['arquivados_na_importacao'] += 1
             if not simular:
+                colunas = ['nome', 'telefone', 'email', 'origem', 'tipo_interesse', 'status', 'temperatura', 'responsavel_id',
+                           'whatsapp_opt_in', 'whatsapp_opt_in_source', 'whatsapp_opt_in_at', 'whatsapp_opt_out', 'observacoes',
+                           'info_fonte', 'codigo_externo', 'data_limite', 'data_status', 'valor_interesse',
+                           'arquivado', 'arquivado_em', 'motivo_arquivamento']
+                valores = [e['nome'] or f'Contato {tel[-4:]}', tel, e['email'], origem_lead or 'Importação CSV', 'Lancamento',
+                           status_final or 'Novo', 'Frio', usuario_id, opt_in, origem_txt if opt_in else '',
+                           (e['data'] or agora) if opt_in else None, opt_out, e['obs'],
+                           e['info_fonte'] or None, e['codigo'] or None, e['data_limite'], e['data_status'], e['valor'],
+                           1 if arquivar_novo else 0, agora if arquivar_novo else None, motivo_arq if arquivar_novo else None]
+                if e['data_cadastro']:
+                    colunas.append('criado_em'); valores.append(e['data_cadastro'])
                 conn.execute(
-                    '''INSERT INTO leads
-                       (nome, telefone, email, origem, tipo_interesse, status, temperatura, responsavel_id,
-                        whatsapp_opt_in, whatsapp_opt_in_source, whatsapp_opt_in_at, whatsapp_opt_out, observacoes)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                    (e['nome'] or f'Contato {tel[-4:]}', tel, e['email'], e['origem_lead'] or 'Importação CSV', 'Lancamento',
-                     status_final or 'Novo', 'Frio', usuario_id, opt_in, origem_txt if opt_in else '',
-                     (e['data'] or agora) if opt_in else None, opt_out, e['obs']),
-                )
-            if opt_in and not opt_out:
+                    f"INSERT INTO leads ({', '.join(colunas)}) VALUES ({', '.join('?' * len(colunas))})", valores)
+            if opt_in and not opt_out and not arquivar_novo:
                 elegiveis.append({'nome': e['nome'] or f'Contato {tel[-4:]}', 'telefone': tel})
             else:
                 nao_elegiveis += 1
@@ -3257,7 +3376,7 @@ def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
     relatorio = {
         'success': True, 'simulado': bool(simular), 'total_linhas': len(linhas),
         'telefones_unicos': len(por_tel), 'duplicadas_no_arquivo': duplicadas,
-        **r, 'status_novos': novos_status, 'elegiveis': len(elegiveis), 'nao_elegiveis': nao_elegiveis,
+        **r, 'origens_unificadas': origens_unificadas, 'origens_padronizadas': origens_padronizadas, 'status_novos': novos_status, 'elegiveis': len(elegiveis), 'nao_elegiveis': nao_elegiveis,
         'erros_total': len(erros), 'erros': erros[:50], 'avisos_total': len(avisos), 'avisos': avisos[:50],
         'contatos_elegiveis': elegiveis,
     }
@@ -3280,8 +3399,8 @@ def importar_leads_csv():
     linhas = data.get('linhas')
     if not isinstance(linhas, list) or not linhas:
         return jsonify({'success': False, 'error': 'Nenhuma linha para importar.'}), 400
-    if len(linhas) > 20000:
-        return jsonify({'success': False, 'error': 'Limite de 20.000 linhas por importação.'}), 400
+    if len(linhas) > 50000:
+        return jsonify({'success': False, 'error': 'Limite de 50.000 linhas por importação.'}), 400
     conn = get_db()
     try:
         relatorio = _importar_leads_csv(
@@ -3293,6 +3412,7 @@ def importar_leads_csv():
             fonte=str(data.get('fonte') or '').strip()[:120],
             usuario_id=session.get('user_id'),
             atualizar_status=bool(data.get('atualizar_status')),
+            arquivar_status=data.get('arquivar_status') if isinstance(data.get('arquivar_status'), list) else None,
         )
         return jsonify(relatorio)
     except ValueError as exc:
@@ -3366,17 +3486,40 @@ _EXT_IMPORTACAO = {'.csv', '.txt', '.xlsx'}
 _MAX_IMPORTACAO_BYTES = 10 * 1024 * 1024
 
 
-def _xlsx_para_csv(origem):
-    """Converte a primeira aba de uma planilha .xlsx em texto CSV (para o mesmo leitor do CSV)."""
+def _xlsx_abas(origem):
+    """Abas da planilha com a quantidade de linhas preenchidas: [{'nome': ..., 'linhas': n}]."""
     try:
         from openpyxl import load_workbook
     except ImportError as exc:
         raise RuntimeError('Suporte a .xlsx indisponível (instale openpyxl).') from exc
     wb = load_workbook(origem, read_only=True, data_only=True)
     try:
+        abas = []
+        for ws in wb.worksheets:
+            n = 0
+            for linha in ws.iter_rows(values_only=True):
+                if any(v not in (None, '') and str(v).strip() for v in linha):
+                    n += 1
+            abas.append({'nome': ws.title, 'linhas': max(n - 1, 0)})   # sem o cabecalho
+        return abas
+    finally:
+        wb.close()
+
+
+def _xlsx_para_csv(origem, aba=None):
+    """Converte uma aba de uma planilha .xlsx (a primeira, se nao informada) em texto CSV."""
+    try:
+        from openpyxl import load_workbook
+    except ImportError as exc:
+        raise RuntimeError('Suporte a .xlsx indisponível (instale openpyxl).') from exc
+    wb = load_workbook(origem, read_only=True, data_only=True)
+    try:
+        if aba and aba not in wb.sheetnames:
+            raise ValueError('Aba não encontrada na planilha.')
+        ws = wb[aba] if aba else wb.worksheets[0]
         saida = io.StringIO()
         escritor = csv.writer(saida)
-        for linha in wb.worksheets[0].iter_rows(values_only=True):
+        for linha in ws.iter_rows(values_only=True):
             celulas = []
             for v in linha:
                 if v is None:
@@ -3396,9 +3539,9 @@ def _xlsx_para_csv(origem):
         wb.close()
 
 
-def _texto_do_arquivo(caminho):
+def _texto_do_arquivo(caminho, aba=None):
     if caminho.suffix.lower() == '.xlsx':
-        return _xlsx_para_csv(caminho)
+        return _xlsx_para_csv(caminho, aba)
     bruto = caminho.read_bytes()
     for codificacao in ('utf-8-sig', 'cp1252'):
         try:
@@ -3446,7 +3589,16 @@ def ler_arquivo_importacao():
         return jsonify({'success': False, 'error': 'Arquivo fora da pasta de importação.'}), 400
     if real.stat().st_size > _MAX_IMPORTACAO_BYTES:
         return jsonify({'success': False, 'error': 'Arquivo maior que 10 MB.'}), 413
+    aba = str((request.get_json(silent=True) or {}).get('aba') or '').strip() or None
     try:
+        if real.suffix.lower() == '.xlsx':
+            abas = _xlsx_abas(real)
+            if aba and aba not in [a['nome'] for a in abas]:
+                return jsonify({'success': False, 'error': 'Aba não encontrada na planilha.'}), 400
+            if len(abas) > 1 and not aba:
+                return jsonify({'success': True, 'nome': nome, 'abas': abas, 'escolher_aba': True})
+            texto = _texto_do_arquivo(real, aba)
+            return jsonify({'success': True, 'nome': nome, 'texto': texto, 'abas': abas, 'aba': aba or abas[0]['nome']})
         texto = _texto_do_arquivo(real)
     except RuntimeError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 501
@@ -3465,8 +3617,14 @@ def converter_planilha_xlsx():
     bruto = arquivo.read(_MAX_IMPORTACAO_BYTES + 1)
     if len(bruto) > _MAX_IMPORTACAO_BYTES:
         return jsonify({'success': False, 'error': 'Arquivo maior que 10 MB.'}), 413
+    aba = str(request.form.get('aba') or '').strip() or None
     try:
-        return jsonify({'success': True, 'texto': _xlsx_para_csv(io.BytesIO(bruto))})
+        abas = _xlsx_abas(io.BytesIO(bruto))
+        if aba and aba not in [a['nome'] for a in abas]:
+            return jsonify({'success': False, 'error': 'Aba não encontrada na planilha.'}), 400
+        if len(abas) > 1 and not aba:
+            return jsonify({'success': True, 'abas': abas, 'escolher_aba': True})
+        return jsonify({'success': True, 'texto': _xlsx_para_csv(io.BytesIO(bruto), aba), 'abas': abas, 'aba': aba or abas[0]['nome']})
     except RuntimeError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 501
     except Exception:
