@@ -454,6 +454,14 @@ def init_db():
         "CREATE TABLE IF NOT EXISTS respostas_processadas (message_id TEXT PRIMARY KEY, criado_em DATETIME DEFAULT CURRENT_TIMESTAMP)"
     )
 
+    _neg_cols = {row["name"] for row in c.execute("PRAGMA table_info(negocios)").fetchall()}
+    for _coluna, _definicao in (
+        ("modalidade", "TEXT"), ("etapa_origem", "TEXT"), ("tipologia", "TEXT"), ("produtos", "TEXT"),
+        ("valor_aluguel", "REAL"), ("data_inicio", "DATE"), ("data_visita", "DATE"), ("data_documentacao", "DATE"),
+        ("data_inicio_vigencia", "DATE"), ("data_encerramento", "DATE"), ("motivo_perda", "TEXT"),
+    ):
+        if _coluna not in _neg_cols:
+            c.execute(f"ALTER TABLE negocios ADD COLUMN {_coluna} {_definicao}")
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS status_leads (
@@ -1071,6 +1079,9 @@ def negocios():
          data.get('valor_financiado',0), data.get('valor_entrada',0),
          data.get('observacoes','')))
     negocio_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+    for campo in _CAMPOS_EXTRA_NEGOCIO:
+        if data.get(campo) not in ('', None):
+            conn.execute(f'UPDATE negocios SET {campo}=? WHERE id=?', (data[campo], negocio_id))
     # Criar comissão automaticamente
     if data.get('valor_comissao',0) > 0:
         conn.execute('''INSERT INTO comissoes (negocio_id,valor_total,status)
@@ -1106,6 +1117,10 @@ def negocio_detail(id):
          data.get('financiamento',0), data.get('banco_financiamento',''),
          data.get('valor_financiado',0), data.get('valor_entrada',0),
          data.get('data_aprovacao_financiamento'), data.get('observacoes',''), id))
+    for campo in _CAMPOS_EXTRA_NEGOCIO:
+        if campo in data:
+            valor = data[campo]
+            conn.execute(f'UPDATE negocios SET {campo}=? WHERE id=?', ((valor if valor not in ('', None) else None), id))
     conn.commit(); conn.close()
     return jsonify({'success': True})
 
@@ -3248,6 +3263,8 @@ def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
         if not isinstance(row, dict):
             continue
         linha = row.get('linha') or posicao
+        if _linha_de_exemplo(row.get('nome')):
+            continue
         tel = _normalizar_telefone_br(row.get('telefone'))
         if not tel:
             erros.append({'linha': linha, 'motivo': 'telefone invalido ou vazio'})
@@ -3501,6 +3518,162 @@ def _importar_leads_csv(conn, linhas, origem_padrao, opt_in_padrao, simular,
         )
         conn.commit()
     return relatorio
+
+
+_STATUS_NEGOCIO_PLANILHA = {'ganho': 'Fechado', 'fechado': 'Fechado', 'perdido': 'Cancelado', 'perda': 'Cancelado',
+                            'cancelado': 'Cancelado', 'proposta': 'Proposta', 'contrato': 'Contrato'}
+_CAMPOS_EXTRA_NEGOCIO = ('modalidade', 'etapa_origem', 'tipologia', 'produtos', 'valor_aluguel', 'data_inicio',
+                         'data_visita', 'data_documentacao', 'data_inicio_vigencia', 'data_encerramento', 'motivo_perda')
+
+
+def _linha_de_exemplo(nome):
+    """A linha de exemplo do modelo de importacao ('EXEMPLO (apague esta linha)') nunca e importada."""
+    return _token_texto(nome).startswith('exemplo (apague')
+
+
+def _status_negocio(status, etapa):
+    """Status da planilha (Em aberto / Ganho / Perdido) + etapa -> status do negocio no CRM."""
+    t = _token_texto(status)
+    if t in _STATUS_NEGOCIO_PLANILHA:
+        return _STATUS_NEGOCIO_PLANILHA[t]
+    return 'Contrato' if _token_texto(etapa) == 'contrato' else 'Proposta'
+
+
+def _importar_negocios(conn, linhas, simular, criar_leads, fonte, usuario_id):
+    """Cria negocios (e a comissao/recebimento) a partir das linhas de uma planilha de funil."""
+    por_tel, por_nome = {}, {}
+    for l in conn.execute("SELECT id, nome, telefone FROM leads").fetchall():
+        tel = _normalizar_telefone_br(l['telefone'])
+        if tel:
+            por_tel.setdefault(tel, []).append(l['id'])
+        por_nome.setdefault(_token_texto(l['nome']), []).append(l['id'])
+    r = {'criados': 0, 'leads_vinculados': 0, 'leads_criados': 0, 'duplicados': 0, 'linhas_vazias': 0,
+         'comissoes_criadas': 0, 'recebimentos_registrados': 0}
+    erros, avisos = [], []
+    for pos, row in enumerate(linhas, start=2):
+        if not isinstance(row, dict):
+            continue
+        linha = row.get('linha') or pos
+        cliente = ' '.join(str(row.get('cliente') or '').split())[:200]
+        tel_bruto = str(row.get('telefone') or '').strip()
+        tel = _normalizar_telefone_br(tel_bruto)
+        if _linha_de_exemplo(cliente) or (not cliente and not _re.sub(r'\D', '', tel_bruto)):
+            r['linhas_vazias'] += 1
+            continue
+        if tel_bruto and not tel:
+            avisos.append({'linha': linha, 'motivo': 'telefone invalido; o lead sera procurado pelo nome'})
+        lead_id = None
+        if tel and por_tel.get(tel):
+            lead_id = por_tel[tel][0]
+        elif cliente and len(por_nome.get(_token_texto(cliente), [])) == 1:
+            lead_id = por_nome[_token_texto(cliente)][0]
+        if lead_id is None and not criar_leads:
+            erros.append({'linha': linha, 'motivo': 'lead nao encontrado (ative "criar leads que nao existirem")'})
+            continue
+        if lead_id is None and not cliente:
+            erros.append({'linha': linha, 'motivo': 'sem nome do cliente'})
+            continue
+        datas = {}
+        for chave in ('data_inicio', 'data_visita', 'data_proposta', 'data_documentacao', 'data_contrato',
+                      'data_inicio_vigencia', 'data_encerramento'):
+            bruto = row.get(chave)
+            if str(bruto or '').strip():
+                convertida = _parse_data_flexivel(bruto)
+                if convertida:
+                    datas[chave] = convertida
+                else:
+                    avisos.append({'linha': linha, 'motivo': f'{chave}: data invalida ({str(bruto)[:20]}); ignorada'})
+        valor_venda = _parse_valor(row.get('valor_potencial'))
+        valor_aluguel = _parse_valor(row.get('valor_aluguel'))
+        comissao = _parse_valor(row.get('comissao'))
+        status = _status_negocio(row.get('status'), row.get('etapa'))
+        if status == 'Fechado' and 'data_contrato' not in datas and datas.get('data_encerramento'):
+            datas['data_contrato'] = datas['data_encerramento']
+        modalidade = str(row.get('modalidade') or '').strip()[:30] or ('Locação' if valor_aluguel else ('Venda' if valor_venda else ''))
+        tipo = str(row.get('tipo') or '').strip() if str(row.get('tipo') or '').strip() in ('Lancamento', 'QuintoAndar', 'Revenda') else 'Lancamento'
+        if lead_id is not None:
+            existe = conn.execute(
+                "SELECT 1 FROM negocios WHERE lead_id=? AND COALESCE(data_inicio, data_proposta, '')=? "
+                "AND COALESCE(valor_venda,0)=? AND COALESCE(valor_aluguel,0)=?",
+                (lead_id, datas.get('data_inicio') or datas.get('data_proposta') or '', valor_venda or 0, valor_aluguel or 0),
+            ).fetchone()
+            if existe:
+                r['duplicados'] += 1
+                continue
+            r['leads_vinculados'] += 1
+        else:
+            r['leads_criados'] += 1
+        r['criados'] += 1
+        if comissao and comissao > 0:
+            r['comissoes_criadas'] += 1
+        recebimento = str(row.get('recebimento') or '').strip()
+        data_receb = _parse_data_flexivel(recebimento) if recebimento else None
+        valor_receb = None
+        if recebimento and not data_receb:
+            valor_receb = _parse_valor(recebimento)
+        if comissao and comissao > 0 and (data_receb or valor_receb):
+            r['recebimentos_registrados'] += 1
+        if simular:
+            continue
+        if lead_id is None:
+            lead_status = {'Fechado': 'Fechado', 'Cancelado': 'Perdido'}.get(status, 'Contato')
+            lead_status, _ = _garantir_status_lead(conn, lead_status)
+            cur = conn.execute(
+                "INSERT INTO leads (nome, telefone, origem, tipo_interesse, status, temperatura, responsavel_id) VALUES (?,?,?,?,?,?,?)",
+                (cliente, tel or '', 'Importação de negócios', tipo, lead_status, 'Frio', usuario_id))
+            lead_id = cur.lastrowid
+            if tel:
+                por_tel.setdefault(tel, []).append(lead_id)
+            por_nome.setdefault(_token_texto(cliente), []).append(lead_id)
+        percentual = round(100 * comissao / valor_venda, 2) if comissao and valor_venda else 0
+        cur = conn.execute(
+            """INSERT INTO negocios (lead_id, tipo, status, valor_venda, valor_comissao, percentual_comissao,
+                   data_proposta, data_contrato, observacoes, modalidade, etapa_origem, tipologia, produtos, valor_aluguel,
+                   data_inicio, data_visita, data_documentacao, data_inicio_vigencia, data_encerramento, motivo_perda)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (lead_id, tipo, status, valor_venda or 0, comissao or 0, percentual, datas.get('data_proposta'),
+             datas.get('data_contrato'), f'Importado de {fonte}' if fonte else 'Importado de planilha', modalidade,
+             str(row.get('etapa') or '').strip()[:60], str(row.get('tipologia') or '').strip()[:120],
+             str(row.get('produtos') or '').strip()[:200], valor_aluguel, datas.get('data_inicio'), datas.get('data_visita'),
+             datas.get('data_documentacao'), datas.get('data_inicio_vigencia'), datas.get('data_encerramento'),
+             str(row.get('motivo_perda') or '').strip()[:200] or None))
+        if comissao and comissao > 0:
+            recebido = comissao if data_receb and not valor_receb else (valor_receb or 0)
+            status_com = 'Pago' if recebido >= comissao else ('Parcial' if recebido > 0 else 'Pendente')
+            conn.execute(
+                "INSERT INTO comissoes (negocio_id, valor_total, valor_recebido, status, data_recebimento) VALUES (?,?,?,?,?)",
+                (cur.lastrowid, comissao, recebido, status_com, data_receb if recebido else None))
+    relatorio = {'success': True, 'simulado': bool(simular), 'total_linhas': len(linhas), **r,
+                 'erros_total': len(erros), 'erros': erros[:50], 'avisos_total': len(avisos), 'avisos': avisos[:50]}
+    if not simular:
+        conn.execute(
+            "INSERT INTO importacoes (tipo, arquivo_nome, total_registros, importados, erros, log_detalhado) VALUES (?,?,?,?,?,?)",
+            ('negocios', fonte or 'planilha', len(linhas), r['criados'], len(erros),
+             json.dumps({k: v for k, v in relatorio.items() if k not in ('erros', 'avisos')} | {'erros': erros[:200]}, ensure_ascii=False)))
+        conn.commit()
+    return relatorio
+
+
+@app.route('/api/importar/negocios', methods=['POST'])
+@login_required
+def importar_negocios_planilha():
+    data = request.get_json(silent=True) or {}
+    linhas = data.get('linhas')
+    if not isinstance(linhas, list) or not linhas:
+        return jsonify({'success': False, 'error': 'Nenhuma linha para importar.'}), 400
+    if len(linhas) > 20000:
+        return jsonify({'success': False, 'error': 'Limite de 20.000 linhas por importação.'}), 400
+    conn = get_db()
+    try:
+        return jsonify(_importar_negocios(
+            conn, linhas, simular=bool(data.get('simular')),
+            criar_leads=bool(data.get('criar_leads', True)),
+            fonte=str(data.get('fonte') or '').strip()[:120], usuario_id=session.get('user_id')))
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 @app.route('/api/importar/leads', methods=['POST'])

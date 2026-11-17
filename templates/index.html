@@ -1074,7 +1074,7 @@ async function registrarInteracao(leadId, tipo, dotClass) {
 function switchTab(btn, tabId) {
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   btn.classList.add('active');
-  ['tab-info','tab-timeline','tab-negocios'].forEach(id=>{
+  ['tab-info','tab-timeline','tab-negocios','neg-info','neg-financ','neg-origem','neg-comissao'].forEach(id=>{
     const el=document.getElementById(id);
     if(el) el.style.display = id===tabId?'block':'none';
   });
@@ -1176,6 +1176,7 @@ async function abrirNegocio(id) {
     <div class="tabs">
       <button class="tab active" onclick="switchTab(this,'neg-info')">Negócio</button>
       <button class="tab" onclick="switchTab(this,'neg-financ')">Financiamento</button>
+      <button class="tab" onclick="switchTab(this,'neg-origem')">Detalhes</button>
       <button class="tab" onclick="switchTab(this,'neg-comissao')">Comissão</button>
     </div>
     <div id="neg-info">
@@ -1213,6 +1214,21 @@ async function abrirNegocio(id) {
         <div class="form-group"><label>Valor Entrada (R$)</label><input id="n-entrada" type="number" value="${n.valor_entrada||''}"></div>
         <div class="form-group"><label>Valor Financiado (R$)</label><input id="n-financiado" type="number" value="${n.valor_financiado||''}"></div>
         <div class="form-group"><label>Data Aprovação</label><input id="n-daprov" type="date" value="${n.data_aprovacao_financiamento||''}"></div>
+      </div>
+    </div>
+    <div id="neg-origem" style="display:none">
+      <div class="form-grid">
+        <div class="form-group"><label>Modalidade</label><select id="n-modalidade"><option value=""></option><option ${n.modalidade==='Locação'?'selected':''}>Locação</option><option ${n.modalidade==='Venda'?'selected':''}>Venda</option></select></div>
+        <div class="form-group"><label>Etapa no funil de origem</label><input id="n-etapaorig" value="${_escCSV(n.etapa_origem||'')}"></div>
+        <div class="form-group"><label>Tipologia / produto</label><input id="n-tipologia" value="${_escCSV(n.tipologia||'')}"></div>
+        <div class="form-group"><label>Produtos</label><input id="n-produtos" value="${_escCSV(n.produtos||'')}"></div>
+        <div class="form-group"><label>Valor do aluguel (R$)</label><input id="n-valaluguel" type="number" value="${n.valor_aluguel||''}"></div>
+        <div class="form-group"><label>Início do negócio</label><input id="n-dinicio" type="date" value="${_escCSV(n.data_inicio||'')}"></div>
+        <div class="form-group"><label>Visita</label><input id="n-dvisita" type="date" value="${_escCSV(n.data_visita||'')}"></div>
+        <div class="form-group"><label>Documentação</label><input id="n-ddoc" type="date" value="${_escCSV(n.data_documentacao||'')}"></div>
+        <div class="form-group"><label>Início da vigência</label><input id="n-dvigencia" type="date" value="${_escCSV(n.data_inicio_vigencia||'')}"></div>
+        <div class="form-group"><label>Encerramento do negócio</label><input id="n-dencerr" type="date" value="${_escCSV(n.data_encerramento||'')}"></div>
+        <div class="form-group form-full"><label>Motivo da perda</label><input id="n-motivoperda" value="${_escCSV(n.motivo_perda||'')}"></div>
       </div>
     </div>
     <div id="neg-comissao" style="display:none">
@@ -1267,6 +1283,17 @@ async function salvarNegocio(id) {
     valor_financiado: document.getElementById('n-financiado').value,
     data_aprovacao_financiamento: document.getElementById('n-daprov').value,
     observacoes: document.getElementById('n-obs').value,
+    modalidade: document.getElementById('n-modalidade').value,
+    etapa_origem: document.getElementById('n-etapaorig').value,
+    tipologia: document.getElementById('n-tipologia').value,
+    produtos: document.getElementById('n-produtos').value,
+    valor_aluguel: document.getElementById('n-valaluguel').value,
+    data_inicio: document.getElementById('n-dinicio').value,
+    data_visita: document.getElementById('n-dvisita').value,
+    data_documentacao: document.getElementById('n-ddoc').value,
+    data_inicio_vigencia: document.getElementById('n-dvigencia').value,
+    data_encerramento: document.getElementById('n-dencerr').value,
+    motivo_perda: document.getElementById('n-motivoperda').value,
   });
   alert('✅ Negócio salvo!');
   closeModal();
@@ -2279,7 +2306,118 @@ function lerCSVContatos(texto) {
 
 function importarCSV() { abrirImportacaoLeadsCSV(true); }
 
+// ── Importação de negócios (funil / vendas / locação) ─────────────────────────────
+const _ALIAS_NEGOCIOS = {
+  cliente: ['cliente','nomedocliente','nomeesobrenome','nome'],
+  telefone: ['telefonedocliente','telefone','celular','whatsapp'],
+  etapa: ['etapa'],
+  status: ['status','situacao'],
+  data_inicio: ['iniciodonegocio','datainicio','inicio'],
+  data_encerramento: ['encerramentodonegocio','encerramento','dataencerramento'],
+  data_visita: ['visita','datavisita'],
+  data_proposta: ['proposta','dataproposta'],
+  data_documentacao: ['documentacao','datadocumentacao'],
+  data_contrato: ['contrato','datacontrato'],
+  data_inicio_vigencia: ['iniciovigencia','iniciodavigencia','iniciodacontratacao'],
+  tipologia: ['tipologiaproduto','tipologia','produto'],
+  produtos: ['produtos'],
+  valor_potencial: ['valorpotencial','valordevenda','valorvenda'],
+  valor_aluguel: ['valoraluguel','aluguel'],
+  comissao: ['comissao','valorcomissao'],
+  recebimento: ['recebimento','recebido','datarecebimento'],
+  motivo_perda: ['motivodeperda','motivoperda'],
+  modalidade: ['modalidade'],
+  tipo: ['tipo']
+};
+const _ROTULOS_NEGOCIO = {cliente:'Cliente', telefone:'Telefone', etapa:'Etapa', status:'Status', data_inicio:'Início do negócio', data_encerramento:'Encerramento', data_visita:'Visita', data_proposta:'Proposta', data_documentacao:'Documentação', data_contrato:'Contrato', data_inicio_vigencia:'Início da vigência', tipologia:'Tipologia/produto', produtos:'Produtos', valor_potencial:'Valor potencial', valor_aluguel:'Valor do aluguel', comissao:'Comissão', recebimento:'Recebimento', motivo_perda:'Motivo da perda', modalidade:'Modalidade', tipo:'Tipo'};
+
+function lerCSVNegocios(texto) {
+  const linhas = parseCSVTexto(texto);
+  if(!linhas.length) return {erro: 'O arquivo está vazio.'};
+  const cab = linhas[0].map(_normCab);
+  const col = {};
+  Object.entries(_ALIAS_NEGOCIOS).forEach(([campo, aliases]) => {
+    for(const a of aliases.map(_normCab)) {
+      const i = cab.indexOf(a);
+      if(i >= 0 && !Object.values(col).includes(i)) { col[campo] = i; break; }
+    }
+  });
+  if(col.cliente === undefined && col.telefone === undefined) return {erro: 'Não encontrei a coluna do cliente nem a do telefone. Use o modelo de importação (aba NEGOCIOS).'};
+  const dados = [];
+  for(let i = 1; i < linhas.length; i++) {
+    const o = {linha: i + 1};
+    Object.keys(col).forEach(campo => { o[campo] = linhas[i][col[campo]] ?? ''; });
+    dados.push(o);
+  }
+  const usadas = new Set(Object.values(col));
+  return {linhas: dados, colunas: Object.keys(col), ignoradas: linhas[0].filter((n, i) => n && !usadas.has(i))};
+}
+
+function mostrarDialogoImportNegocios() {
+  fecharDialogoImportCSV();
+  const d = window._impNeg;
+  const ov = document.createElement('div');
+  ov.id = 'imp-csv-overlay'; ov.className = 'modal-overlay'; ov.style.zIndex = 2000;
+  ov.innerHTML = `
+    <div class="modal modal-lg fade-in">
+      <div class="modal-header"><h2>Importar negócios</h2><button class="modal-close" onclick="fecharDialogoImportCSV()">×</button></div>
+      <div class="modal-body" style="max-height:70vh;overflow:auto">
+        <p style="font-size:13px;color:var(--text2);margin-bottom:6px"><strong>${_escCSV(d.arquivo)}</strong> — ${d.linhas.length.toLocaleString('pt-BR')} linha(s).<br>
+          Colunas usadas: ${d.colunas.map(c => _escCSV(_ROTULOS_NEGOCIO[c] || c)).join(', ')}.</p>
+        ${d.ignoradas.length ? `<p style="font-size:12px;color:var(--text3);margin-bottom:10px">Colunas ignoradas: ${d.ignoradas.map(_escCSV).join(', ')}.</p>` : ''}
+        <p style="font-size:12px;color:var(--text3);margin-bottom:12px">Cada linha vira um negócio ligado ao lead (pelo telefone ou, sem telefone, pelo nome). Status: <strong>Ganho</strong> → Fechado, <strong>Perdido</strong> → Cancelado, <strong>Em aberto</strong> → Proposta (ou Contrato, se a etapa for Contrato). Com comissão informada, a comissão e o recebimento também são criados. Linhas sem cliente e telefone são ignoradas, e negócios já importados não são duplicados.</p>
+        <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:10px 0"><input type="checkbox" id="impn-criar-leads" checked> <span>Criar o lead dos clientes que ainda não existem no CRM</span></label>
+        <div id="imp-csv-relatorio" style="margin-top:12px;font-size:13px"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="fecharDialogoImportCSV()">Fechar</button>
+        <button class="btn btn-secondary" id="imp-btn-sim" onclick="executarImportNegocios(true)">Simular</button>
+        <button class="btn btn-primary" id="imp-btn-go" onclick="executarImportNegocios(false)">Importar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+}
+
+async function executarImportNegocios(simular) {
+  const d = window._impNeg;
+  if(!d || d.concluida) return;
+  const rel = document.getElementById('imp-csv-relatorio');
+  rel.textContent = 'Processando...';
+  let r;
+  try { r = await POST('/importar/negocios', {linhas: d.linhas, fonte: d.arquivo, simular: !!simular, criar_leads: document.getElementById('impn-criar-leads').checked}); }
+  catch(err) { rel.textContent = 'Falha de comunicação com o servidor.'; return; }
+  if(!r || !r.success) { rel.innerHTML = `<span style="color:var(--red)">${_escCSV((r && r.error) || 'Não foi possível importar.')}</span>`; return; }
+  const n = v => Number(v || 0).toLocaleString('pt-BR');
+  const linhasRel = [
+    [r.simulado ? 'SIMULAÇÃO (nada foi gravado)' : 'Importação concluída', ''],
+    ['Linhas lidas', n(r.total_linhas)],
+    ['Negócios criados', n(r.criados)],
+    ['  ligados a leads existentes', n(r.leads_vinculados)],
+    ['  com lead novo criado', n(r.leads_criados)],
+    ['Comissões criadas / recebimentos registrados', `${n(r.comissoes_criadas)} / ${n(r.recebimentos_registrados)}`],
+    ['Já importados antes (ignorados)', n(r.duplicados)],
+    ['Linhas vazias ignoradas', n(r.linhas_vazias)],
+    ['Linhas com erro / avisos', `${n(r.erros_total)} / ${n(r.avisos_total)}`]
+  ];
+  let html = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px">${linhasRel.map(([k, v]) => `<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0"><span style="white-space:pre">${_escCSV(k)}</span><strong>${_escCSV(v)}</strong></div>`).join('')}</div>`;
+  if(r.erros && r.erros.length) html += `<div style="margin-top:8px;color:var(--red);font-size:12px">${r.erros.slice(0, 10).map(e => `Linha ${_escCSV(e.linha)}: ${_escCSV(e.motivo)}`).join('<br>')}${r.erros_total > 10 ? '<br>…' : ''}</div>`;
+  if(r.avisos && r.avisos.length) html += `<div style="margin-top:8px;color:var(--text3);font-size:12px">${r.avisos.slice(0, 5).map(e => `Linha ${_escCSV(e.linha)}: ${_escCSV(e.motivo)}`).join('<br>')}${r.avisos_total > 5 ? '<br>…' : ''}</div>`;
+  rel.innerHTML = html;
+  if(!r.simulado) {
+    d.concluida = true;
+    document.getElementById('imp-btn-go').disabled = true;
+    document.getElementById('imp-btn-sim').disabled = true;
+  }
+}
+
 function processarTextoImportCSV(texto, nomeArquivo, paraCampanha) {
+  if(paraCampanha === 'negocios') {
+    const lidoNeg = lerCSVNegocios(texto);
+    if(lidoNeg.erro) { alert(lidoNeg.erro); return; }
+    window._impNeg = {linhas: lidoNeg.linhas, colunas: lidoNeg.colunas, ignoradas: lidoNeg.ignoradas, arquivo: nomeArquivo, concluida: false};
+    mostrarDialogoImportNegocios();
+    return;
+  }
   const lido = lerCSVContatos(texto);
   if(lido.erro) { alert(lido.erro); return; }
   window._impCSV = {linhas: lido.linhas, colunas: lido.colunas, ignoradas: lido.ignoradas || [], semCabecalho: lido.semCabecalho, arquivo: nomeArquivo, paraCampanha: !!paraCampanha, concluida: false};
@@ -2357,7 +2495,7 @@ async function abrirImportacaoDrive(paraCampanha) {
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" onclick="fecharDriveCSV()">Fechar</button>
-        <button class="btn btn-secondary" onclick="listarArquivosDrive(${paraCampanha ? 'true' : 'false'})"><i class="fas fa-sync"></i> Atualizar lista</button>
+        <button class="btn btn-secondary" onclick="listarArquivosDrive(${paraCampanha === 'negocios' ? "'negocios'" : (paraCampanha ? 'true' : 'false')})"><i class="fas fa-sync"></i> Atualizar lista</button>
       </div>
     </div>`;
   document.body.appendChild(ov);
@@ -2790,6 +2928,12 @@ async function renderImportar() {
       <p style="color:var(--text2);font-size:13px;margin-bottom:12px">Cadastra leads novos e atualiza nome e e-mail dos existentes. Colunas: <code>nome</code>, <code>telefone</code> (ou <code>numero</code>), <code>email</code>, <code>status</code>, <code>origem</code>, <code>observacoes</code>, <code>opt_in</code>, <code>opt_out</code>, <code>origem_consentimento</code>, <code>data_consentimento</code>. Status que não existem no CRM são criados. Sem cabeçalho: A = nome, B = número.</p>
       <button class="btn btn-primary" onclick="abrirImportacaoLeadsCSV(false)"><i class="fas fa-file-csv"></i> Escolher arquivo (CSV ou Excel)</button>
       <button class="btn btn-secondary" onclick="abrirImportacaoDrive(false)"><i class="fas fa-cloud-download-alt"></i> Do Google Drive</button>
+    </div>
+    <div class="card" style="margin-bottom:24px">
+      <div class="card-title"><i class="fas fa-handshake" style="color:var(--accent)"></i> Importar Negócios (funil de vendas e locação)</div>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:12px">Cria negócios, comissões e recebimentos a partir de uma planilha, ligando cada um ao lead. Colunas: <code>cliente</code>, <code>telefone</code>, <code>etapa</code>, <code>status</code> (Em aberto/Ganho/Perdido), datas (<code>início</code>, <code>visita</code>, <code>proposta</code>, <code>documentação</code>, <code>contrato</code>, <code>início da vigência</code>, <code>encerramento</code>), <code>tipologia</code>, <code>produtos</code>, <code>valor potencial</code>, <code>valor do aluguel</code>, <code>comissão</code>, <code>recebimento</code> e <code>motivo da perda</code>.</p>
+      <button class="btn btn-primary" onclick="abrirImportacaoLeadsCSV('negocios')"><i class="fas fa-file-excel"></i> Escolher arquivo (CSV ou Excel)</button>
+      <button class="btn btn-secondary" onclick="abrirImportacaoDrive('negocios')"><i class="fas fa-cloud-download-alt"></i> Do Google Drive</button>
     </div>
     <div class="grid-2" style="margin-bottom:24px">
 
