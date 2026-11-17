@@ -2086,18 +2086,108 @@ function atualizarListaWA() {
   count.textContent = `${window._waContatos.length} contato(s)`;
 }
 
+// ── Campanha: importar dos leads com filtros (status, origem, tipo, empreendimento...) ──
+function fecharDialogoLeadsCampanha() { document.getElementById('imp-leads-overlay')?.remove(); }
+
 async function importarLeads() {
-  const leads = await GET('/leads');
-  const elegiveis = leads.filter(l => l.telefone && Number(l.whatsapp_opt_in) === 1 && Number(l.whatsapp_opt_out || 0) === 0);
-  const bloqueados = leads.filter(l => l.telefone && !(Number(l.whatsapp_opt_in) === 1 && Number(l.whatsapp_opt_out || 0) === 0));
-  window._waContatos = [...(window._waContatos||[]), ...elegiveis.map(l=>({nome:l.nome,telefone:l.telefone}))];
-  // Deduplicar
-  const unique = [];
-  const seen = new Set();
-  window._waContatos.forEach(c => { if(!seen.has(c.telefone)) { seen.add(c.telefone); unique.push(c); } });
-  window._waContatos = unique;
-  atualizarListaWA();
-  alert(`✅ ${elegiveis.length} leads elegíveis importados!${bloqueados.length ? `\n⚠️ ${bloqueados.length} leads ignorados por falta de opt-in ou por opt-out.` : ''}`);
+  fecharDialogoLeadsCampanha();
+  const f = await GET('/whatsapp/leads-filtros');
+  if(!f || !f.success) return alert((f && f.error) || 'Não foi possível carregar os filtros.');
+  if(!f.total) return alert('Não há leads ativos com telefone para importar.');
+  const n = v => Number(v || 0).toLocaleString('pt-BR');
+  const tipoRotulo = {Lancamento: 'Lançamento', QuintoAndar: 'QuintoAndar', Revenda: 'Revenda'};
+  const grupo = (chave, titulo, itens) => itens.length ? `
+    <div style="border:1px solid var(--border);border-radius:10px;padding:8px 10px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;margin-bottom:4px"><span>${titulo}</span>
+        <a href="#" style="font-weight:400;color:var(--text3)" onclick="limparGrupoLeadsCampanha('${chave}');return false">limpar</a></div>
+      <div style="max-height:140px;overflow:auto">${itens.map(it => `
+        <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin:2px 0"><input type="checkbox" class="lf-${chave}" value="${_escCSV(it.valor)}" onchange="atualizarPreviaLeadsCampanha()">
+          <span style="flex:1">${_escCSV(it.rotulo)}</span><span style="color:var(--text3)">${n(it.total)}</span></label>`).join('')}</div></div>` : '';
+  const ov = document.createElement('div');
+  ov.id = 'imp-leads-overlay'; ov.className = 'modal-overlay'; ov.style.zIndex = 2000;
+  ov.innerHTML = `
+    <div class="modal modal-lg fade-in">
+      <div class="modal-header"><h2>Importar dos leads</h2><button class="modal-close" onclick="fecharDialogoLeadsCampanha()">×</button></div>
+      <div class="modal-body" style="max-height:72vh;overflow:auto">
+        <p style="font-size:12px;color:var(--text3);margin-bottom:12px">${n(f.total)} leads ativos com telefone. Marque quantos filtros quiser: entre filtros diferentes valem <strong>todos</strong> (E); dentro do mesmo filtro, <strong>qualquer</strong> das opções marcadas (OU). Sem filtro nenhum, entram todos os leads com opt-in. Leads arquivados, sem opt-in ou com opt-out nunca entram.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          ${grupo('status', 'Status', f.status.map(x => ({valor: x.valor, rotulo: x.valor, total: x.total})))}
+          ${grupo('origem', 'Origem', f.origem.map(x => ({valor: x.valor, rotulo: x.valor, total: x.total})))}
+          ${grupo('tipo_interesse', 'Tipo de interesse', f.tipo_interesse.map(x => ({valor: x.valor, rotulo: tipoRotulo[x.valor] || x.valor, total: x.total})))}
+          ${grupo('empreendimento_id', 'Empreendimento', f.empreendimento.map(x => ({valor: x.id, rotulo: x.nome, total: x.total})))}
+        </div>
+        <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+          ${f.tem_info_fonte ? `<div class="form-group" style="flex:2;min-width:200px"><label>Informações da fonte contém</label><input id="lf-info" placeholder="Ex.: LISTA MS RUKA" oninput="atualizarPreviaLeadsCampanha()"></div>` : ''}
+          <div class="form-group" style="flex:1;min-width:150px"><label>Limite de contatos (opcional)</label><input id="lf-limite" type="number" min="1" placeholder="Todos" oninput="atualizarPreviaLeadsCampanha()"></div>
+        </div>
+        <div id="leads-previa" style="margin-top:14px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:10px;font-size:13px">Calculando...</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:6px">Com limite, entram os leads mais antigos primeiro (pela data de cadastro).</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="limparFiltrosLeadsCampanha()">Limpar filtros</button>
+        <button class="btn btn-secondary" onclick="fecharDialogoLeadsCampanha()">Cancelar</button>
+        <button class="btn btn-primary" id="leads-btn-importar" onclick="confirmarImportarLeadsCampanha()" disabled><i class="fas fa-users"></i> Importar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+  atualizarPreviaLeadsCampanha();
+}
+
+function coletarFiltrosLeadsCampanha() {
+  const marcados = chave => [...document.querySelectorAll(`#imp-leads-overlay .lf-${chave}:checked`)].map(x => x.value);
+  const info = document.getElementById('lf-info');
+  return {
+    status: marcados('status'), origem: marcados('origem'), tipo_interesse: marcados('tipo_interesse'),
+    empreendimento_id: marcados('empreendimento_id'),
+    info_fonte_contem: info ? info.value.trim() : '',
+    limite: parseInt((document.getElementById('lf-limite') || {}).value) || 0
+  };
+}
+function limparGrupoLeadsCampanha(chave) {
+  document.querySelectorAll(`#imp-leads-overlay .lf-${chave}`).forEach(x => x.checked = false);
+  atualizarPreviaLeadsCampanha();
+}
+function limparFiltrosLeadsCampanha() {
+  document.querySelectorAll('#imp-leads-overlay input[type=checkbox]').forEach(x => x.checked = false);
+  ['lf-info', 'lf-limite'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
+  atualizarPreviaLeadsCampanha();
+}
+
+let _previaLeadsTimer = null, _previaLeadsSeq = 0;
+function atualizarPreviaLeadsCampanha() {
+  clearTimeout(_previaLeadsTimer);
+  _previaLeadsTimer = setTimeout(async () => {
+    const box = document.getElementById('leads-previa'), btn = document.getElementById('leads-btn-importar');
+    if(!box) return;
+    const seq = ++_previaLeadsSeq;
+    const r = await POST('/whatsapp/leads-filtrados', {...coletarFiltrosLeadsCampanha(), listar: false});
+    if(seq !== _previaLeadsSeq || !document.getElementById('leads-previa')) return;      // resposta antiga
+    if(!r || !r.success) { box.textContent = 'Não foi possível calcular.'; return; }
+    const n = v => Number(v || 0).toLocaleString('pt-BR');
+    box.innerHTML = `<strong>${n(r.correspondem)}</strong> lead(s) correspondem aos filtros · <strong style="color:var(--green)">${n(r.elegiveis)} elegíveis</strong> (opt-in ativo)
+      <div style="font-size:12px;color:var(--text3);margin-top:2px">${n(r.sem_opt_in)} sem opt-in · ${n(r.com_opt_out)} com opt-out (não entram)</div>
+      <div style="margin-top:6px">Serão importados: <strong>${n(r.serao_importados)}</strong> contato(s)</div>`;
+    btn.disabled = !r.serao_importados;
+    btn.innerHTML = `<i class="fas fa-users"></i> Importar ${n(r.serao_importados)} contato(s)`;
+  }, 250);
+}
+
+async function confirmarImportarLeadsCampanha() {
+  const btn = document.getElementById('leads-btn-importar');
+  btn.disabled = true;
+  const r = await POST('/whatsapp/leads-filtrados', {...coletarFiltrosLeadsCampanha(), listar: true});
+  if(!r || !r.success) { btn.disabled = false; return alert((r && r.error) || 'Não foi possível importar os leads.'); }
+  window._waContatos = window._waContatos || [];
+  const vistos = new Set(window._waContatos.map(c => String(c.telefone).replace(/\D/g, '')));
+  let adicionados = 0;
+  (r.contatos || []).forEach(c => {
+    const k = String(c.telefone).replace(/\D/g, '');
+    if(k && !vistos.has(k)) { vistos.add(k); window._waContatos.push({nome: c.nome, telefone: c.telefone}); adicionados++; }
+  });
+  if(typeof atualizarListaWA === 'function' && document.getElementById('wa-lista')) atualizarListaWA();
+  fecharDialogoLeadsCampanha();
+  const repetidos = (r.contatos || []).length - adicionados;
+  alert(`${adicionados} contato(s) adicionado(s) à campanha.${repetidos ? `\n${repetidos} já estavam na lista.` : ''}`);
 }
 
 function adicionarManual() {

@@ -2570,6 +2570,117 @@ def _processar_resposta_rapida(conn, phone, texto, message_id=None):
     return aplicado
 
 
+def _filtros_leads_campanha(filtros):
+    """Monta o WHERE dos leads que podem entrar numa campanha: ativos, com telefone e que
+    atendam a TODOS os filtros informados. Dentro de um mesmo filtro vale 'qualquer um dos valores'."""
+    filtros = filtros if isinstance(filtros, dict) else {}
+    where = ["COALESCE(l.arquivado, 0)=0", "l.telefone IS NOT NULL", "TRIM(l.telefone) <> ''"]
+    params = []
+
+    def lista(chave):
+        valores = filtros.get(chave)
+        if not isinstance(valores, list):
+            return []
+        return [str(v).strip() for v in valores if str(v).strip() != ''][:200]
+
+    for campo, chave in (('l.status', 'status'), ('l.origem', 'origem'), ('l.tipo_interesse', 'tipo_interesse')):
+        valores = lista(chave)
+        if valores:
+            where.append(f"{campo} IN ({','.join('?' * len(valores))})")
+            params.extend(valores)
+    ids = []
+    for v in lista('empreendimento_id'):
+        if v.lstrip('-').isdigit():
+            ids.append(int(v))
+    if ids:
+        com_ids = [i for i in ids if i > 0]
+        partes = []
+        if com_ids:
+            partes.append(f"l.empreendimento_id IN ({','.join('?' * len(com_ids))})")
+            params.extend(com_ids)
+        if 0 in ids:   # 0 = "sem empreendimento"
+            partes.append("l.empreendimento_id IS NULL")
+        where.append('(' + ' OR '.join(partes) + ')')
+    info = str(filtros.get('info_fonte_contem') or '').strip()[:100]
+    if info:
+        where.append("l.info_fonte LIKE ?")
+        params.append(f"%{info}%")
+    return ' AND '.join(where), params
+
+
+@app.route('/api/whatsapp/leads-filtros', methods=['GET'])
+@login_required
+def opcoes_filtro_leads_campanha():
+    """Opcoes de filtro (com a quantidade de leads de cada uma) para importar leads numa campanha."""
+    conn = get_db()
+    try:
+        base = "FROM leads l WHERE COALESCE(l.arquivado,0)=0 AND l.telefone IS NOT NULL AND TRIM(l.telefone) <> ''"
+        status = conn.execute(
+            "SELECT l.status AS valor, COUNT(*) AS total FROM leads l "
+            "LEFT JOIN status_leads s ON s.nome = l.status "
+            "WHERE COALESCE(l.arquivado,0)=0 AND l.telefone IS NOT NULL AND TRIM(l.telefone) <> '' "
+            "AND l.status IS NOT NULL AND TRIM(l.status) <> '' "
+            "GROUP BY l.status ORDER BY COALESCE(s.ordem, 5000), l.status"
+        ).fetchall()
+        def por_campo(campo):
+            return [dict(r) for r in conn.execute(
+                f"SELECT l.{campo} AS valor, COUNT(*) AS total {base} AND l.{campo} IS NOT NULL AND TRIM(l.{campo}) <> '' "
+                f"GROUP BY l.{campo} ORDER BY total DESC, valor").fetchall()]
+        empreendimentos = [dict(r) for r in conn.execute(
+            "SELECT COALESCE(e.id, 0) AS id, COALESCE(e.nome, 'Sem empreendimento') AS nome, COUNT(*) AS total "
+            "FROM leads l LEFT JOIN empreendimentos e ON e.id = l.empreendimento_id "
+            "WHERE COALESCE(l.arquivado,0)=0 AND l.telefone IS NOT NULL AND TRIM(l.telefone) <> '' "
+            "GROUP BY COALESCE(e.id, 0) ORDER BY total DESC, nome").fetchall()]
+        return jsonify({
+            'success': True,
+            'total': conn.execute(f"SELECT COUNT(*) {base}").fetchone()[0],
+            'status': [dict(r) for r in status],
+            'origem': por_campo('origem'),
+            'tipo_interesse': por_campo('tipo_interesse'),
+            'empreendimento': empreendimentos,
+            'tem_info_fonte': bool(conn.execute(f"SELECT 1 {base} AND l.info_fonte IS NOT NULL AND TRIM(l.info_fonte) <> '' LIMIT 1").fetchone()),
+        })
+    finally:
+        conn.close()
+
+
+@app.route('/api/whatsapp/leads-filtrados', methods=['POST'])
+@login_required
+def leads_filtrados_campanha():
+    """Conta (e, com listar=true, devolve) os leads que correspondem aos filtros.
+    So entram na campanha os elegiveis: opt-in ativo e sem opt-out."""
+    data = request.get_json(silent=True) or {}
+    where, params = _filtros_leads_campanha(data)
+    conn = get_db()
+    try:
+        r = conn.execute(
+            "SELECT COUNT(*) AS total, "
+            "COALESCE(SUM(CASE WHEN l.whatsapp_opt_out=1 THEN 1 ELSE 0 END), 0) AS optout, "
+            "COALESCE(SUM(CASE WHEN l.whatsapp_opt_out=0 AND l.whatsapp_opt_in=1 THEN 1 ELSE 0 END), 0) AS eleg "
+            "FROM leads l WHERE " + where, params).fetchone()
+        resposta = {
+            'success': True, 'correspondem': r['total'], 'elegiveis': r['eleg'],
+            'com_opt_out': r['optout'], 'sem_opt_in': r['total'] - r['eleg'] - r['optout'],
+        }
+        try:
+            limite = int(data.get('limite') or 0)
+        except (TypeError, ValueError):
+            limite = 0
+        limite = max(0, min(limite, 50000))
+        resposta['serao_importados'] = min(r['eleg'], limite) if limite else r['eleg']
+        if data.get('listar'):
+            sql = ("SELECT l.nome, l.telefone FROM leads l WHERE " + where +
+                   " AND l.whatsapp_opt_in=1 AND l.whatsapp_opt_out=0 ORDER BY l.criado_em, l.id")
+            consulta = list(params)
+            if limite:
+                sql += " LIMIT ?"
+                consulta.append(limite)
+            resposta['contatos'] = [dict(c) for c in conn.execute(sql, consulta).fetchall()]
+        return jsonify(resposta)
+    finally:
+        conn.close()
+
+
 def _status_da_fila(queue_ids):
     """Status atual de cada item da Safe Queue: {queue_id: status}."""
     ids = [q for q in queue_ids if q]
